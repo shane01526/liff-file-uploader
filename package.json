@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "start": "vite preview --port $PORT --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "dev": "vite"
   },
   "dependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "vite": "^4.3.9"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^3.1.0",
-    "vite": "^4.3.9"
+    "@vitejs/plugin-react": "^3.1.0"
   }
 }
