@@ -351,11 +351,8 @@
     </div>
 
     <script>
-        const API_BASE = 'https://liff-file-uploader.onrender.com';
-        fetch(`${API_BASE}/api/health`)
-        
-        // 修復版簡化前端代碼
-console.log('🚀 載入修復版前端代碼');
+        // 修復版前端代碼 - 加強錯誤處理和 LINE 整合
+console.log('🚀 載入增強版前端代碼');
 
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
@@ -370,6 +367,26 @@ const errorMessage = document.getElementById('errorMessage');
 const successMessage = document.getElementById('successMessage');
 
 let selectedFile = null;
+let liffUserId = null;
+
+// LIFF 初始化
+async function initializeLiff() {
+    try {
+        console.log('🔧 初始化 LIFF...');
+        await liff.init({ liffId: '2007898038-DLkNoLpM' });
+        
+        if (liff.isLoggedIn()) {
+            const profile = await liff.getProfile();
+            liffUserId = profile.userId;
+            console.log('👤 LIFF 用戶:', profile.displayName, liffUserId);
+        } else {
+            console.log('❌ LIFF 未登入');
+            liff.login();
+        }
+    } catch (error) {
+        console.error('❌ LIFF 初始化失敗:', error);
+    }
+}
 
 function showError(message) {
     console.error('❌', message);
@@ -418,7 +435,17 @@ uploadArea.addEventListener('drop', (e) => {
 function handleFile(file) {
     console.log('📁 選擇檔案:', file.name, formatFileSize(file.size));
     
-    // 基本檢查
+    // 檔案類型檢查
+    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    const allowedExts = ['.pdf', '.doc', '.docx'];
+    const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+    
+    if (!allowedTypes.includes(file.type) && !allowedExts.includes(fileExt)) {
+        showError('不支援的檔案格式，請上傳 PDF、DOC 或 DOCX 檔案');
+        return;
+    }
+    
+    // 檔案大小檢查
     if (file.size > 10 * 1024 * 1024) {
         showError('檔案太大，請選擇小於 10MB 的檔案');
         return;
@@ -462,14 +489,15 @@ cancelBtn.addEventListener('click', () => {
     successMessage.style.display = 'none';
 });
 
-// 修復的上傳函數
+// 增強的上傳函數
 async function uploadFile() {
     if (!selectedFile) {
-        console.error('沒有選擇檔案');
+        showError('沒有選擇檔案');
         return;
     }
 
     console.log('📤 開始上傳檔案:', selectedFile.name);
+    console.log('👤 用戶 ID:', liffUserId);
     
     uploadBtn.disabled = true;
     uploadBtn.textContent = '上傳中...';
@@ -478,49 +506,50 @@ async function uploadFile() {
     // 進度動畫
     let progress = 0;
     const progressInterval = setInterval(() => {
-        progress += Math.random() * 15;
+        progress += Math.random() * 10 + 5;
         if (progress > 90) progress = 90;
         progressFill.style.width = progress + '%';
-    }, 200);
+    }, 300);
     
     try {
         // 準備表單資料
         const formData = new FormData();
         formData.append('file', selectedFile);
         
-        console.log('🌐 發送請求到 /api/upload');
-        console.log('📦 FormData 內容:');
-        for (let pair of formData.entries()) {
-            console.log(`  ${pair[0]}:`, pair[1]);
+        // 如果有 LINE 用戶 ID，一併送出
+        if (liffUserId) {
+            formData.append('userId', liffUserId);
         }
+        
+        console.log('🌐 發送請求到 /api/upload');
+        
+        // 建立帶有超時的請求
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超時
         
         // 發送請求
         const response = await fetch('/api/upload', {
             method: 'POST',
-            body: formData
-            // 注意：不要設置 Content-Type，讓瀏覽器自動設置 multipart/form-data
+            body: formData,
+            signal: controller.signal,
+            // 讓瀏覽器自動設置 Content-Type 為 multipart/form-data
         });
+        
+        clearTimeout(timeoutId);
         
         console.log('📡 收到回應:');
         console.log('  狀態:', response.status, response.statusText);
-        console.log('  Headers:', Object.fromEntries(response.headers.entries()));
-        
-        // 檢查 Content-Type
-        const contentType = response.headers.get('content-type');
-        console.log('  Content-Type:', contentType);
+        console.log('  Content-Type:', response.headers.get('content-type'));
         
         // 完成進度條
         clearInterval(progressInterval);
         progressFill.style.width = '100%';
         
-        // 讀取回應內容
+        // 讀取回應
         const responseText = await response.text();
-        console.log('📄 原始回應內容:');
-        console.log('  長度:', responseText.length);
-        console.log('  內容:', responseText);
+        console.log('📄 回應內容長度:', responseText.length);
         
-        // 檢查是否為空回應
-        if (!responseText || responseText.trim() === '') {
+        if (!responseText.trim()) {
             throw new Error('服務器返回空回應');
         }
         
@@ -531,7 +560,7 @@ async function uploadFile() {
                 const errorData = JSON.parse(responseText);
                 errorMsg = errorData.error || errorMsg;
             } catch (e) {
-                errorMsg = responseText || errorMsg;
+                errorMsg = responseText.substring(0, 100) || errorMsg;
             }
             throw new Error(errorMsg);
         }
@@ -540,43 +569,56 @@ async function uploadFile() {
         let result;
         try {
             result = JSON.parse(responseText);
-            console.log('✅ JSON 解析成功:', result);
+            console.log('✅ 解析成功:', result);
         } catch (jsonError) {
-            console.error('❌ JSON 解析失敗:');
-            console.error('  錯誤:', jsonError.message);
-            console.error('  原始內容:', responseText);
-            throw new Error(`JSON 解析失敗: ${jsonError.message}`);
+            console.error('❌ JSON 解析失敗:', jsonError);
+            console.error('原始內容:', responseText.substring(0, 200));
+            throw new Error('服務器回應格式錯誤');
         }
         
-        // 檢查業務邏輯結果
+        // 檢查上傳結果
         if (result.success) {
             console.log('🎉 上傳成功!');
             status.textContent = '上傳完成！';
             uploadBtn.textContent = '上傳成功';
             uploadBtn.style.background = 'linear-gradient(135deg, #93c5a1, #7fb78a)';
             
-            showSuccess(`檔案 "${result.fileName}" 上傳成功！`);
+            let successMsg = `檔案 "${result.fileName}" 上傳成功！`;
+            if (result.lineSent) {
+                successMsg += '\n✅ 已發送 LINE 通知';
+            }
+            if (result.fileUrl) {
+                console.log('🔗 檔案連結:', result.fileUrl);
+            }
             
-            // 3秒後重置
+            showSuccess(successMsg);
+            
+            // 5秒後重置
             setTimeout(() => {
                 cancelBtn.click();
-            }, 3000);
+            }, 5000);
             
         } else {
-            throw new Error(result.error || '上傳失敗');
+            throw new Error(result.error || '上傳失敗，請重試');
         }
         
     } catch (error) {
-        console.error('❌ 上傳過程發生錯誤:', error);
+        console.error('❌ 上傳錯誤:', error);
         
         clearInterval(progressInterval);
         progressFill.style.width = '0%';
         
         uploadBtn.disabled = false;
         uploadBtn.textContent = '重試上傳';
+        uploadBtn.style.background = '';
         status.textContent = '上傳失敗';
         
-        showError(`上傳失敗: ${error.message}`);
+        let errorMsg = error.message;
+        if (error.name === 'AbortError') {
+            errorMsg = '上傳超時，請檢查網路連線後重試';
+        }
+        
+        showError(errorMsg);
     }
 }
 
@@ -594,35 +636,47 @@ async function testConnection() {
     try {
         console.log('🔍 測試服務器連接...');
         
-        // 測試基本 API
+        // 測試健康檢查
         const healthResponse = await fetch('/api/health');
-        const healthText = await healthResponse.text();
-        console.log('❤️ 健康檢查:', healthText);
-        
-        const testResponse = await fetch('/api/test');
-        const testText = await testResponse.text();
-        console.log('🧪 測試 API:', testText);
-        
-        if (healthResponse.ok && testResponse.ok) {
-            console.log('✅ 服務器連接正常');
-            showSuccess('服務器連接正常，可以開始上傳檔案');
+        if (healthResponse.ok) {
+            const healthData = await healthResponse.json();
+            console.log('❤️ 健康檢查通過:', healthData);
+        } else {
+            throw new Error(`健康檢查失敗: ${healthResponse.status}`);
         }
+        
+        // 測試基本 API
+        const testResponse = await fetch('/api/test');
+        if (testResponse.ok) {
+            const testData = await testResponse.json();
+            console.log('🧪 測試 API 通過:', testData);
+        }
+        
+        console.log('✅ 服務器連接正常');
+        showSuccess('服務器連接正常，可以開始上傳檔案');
         
     } catch (error) {
         console.error('❌ 服務器連接測試失敗:', error);
-        showError('服務器連接失敗，請檢查服務器是否啟動');
+        showError('服務器連接失敗: ' + error.message);
     }
 }
 
 // 頁面初始化
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('📱 頁面初始化完成');
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('📱 頁面載入完成');
+    
+    // 初始化 LIFF
+    if (typeof liff !== 'undefined') {
+        await initializeLiff();
+    } else {
+        console.warn('⚠️ LIFF SDK 未載入');
+    }
     
     // 延遲測試連接
-    setTimeout(testConnection, 500);
+    setTimeout(testConnection, 1000);
 });
 
-console.log('✅ 修復版前端代碼載入完成');
+console.log('✅ 增強版前端代碼載入完成');
     </script>
 </body>
 </html>
