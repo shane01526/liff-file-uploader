@@ -351,151 +351,47 @@
     </div>
 
     <script>
-        const API_BASE = 'https://liff-file-uploader.onrender.com'; // 留空=跟 index.html 同源，部署到同一 server 時可直接用
+        const API_BASE = 'https://liff-file-uploader.onrender.com';
 
-const uploadArea = document.getElementById('uploadArea');
-const fileInput = document.getElementById('fileInput');
-const fileInfo = document.getElementById('fileInfo');
-const fileName = document.getElementById('fileName');
-const fileSize = document.getElementById('fileSize');
-const progressFill = document.getElementById('progressFill');
-const status = document.getElementById('status');
-const uploadBtn = document.getElementById('uploadBtn');
-const cancelBtn = document.getElementById('cancelBtn');
-const errorMessage = document.getElementById('errorMessage');
-const successMessage = document.getElementById('successMessage');
-
-let selectedFile = null;
-
-function showError(message) {
-    errorMessage.textContent = message;
-    errorMessage.style.display = 'block';
-    successMessage.style.display = 'none';
-}
-
-function showSuccess(message) {
-    successMessage.textContent = message;
-    successMessage.style.display = 'block';
-    errorMessage.style.display = 'none';
-}
-
-uploadArea.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) handleFile(e.target.files[0]);
-});
-
-uploadArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadArea.classList.add('dragover');
-});
-uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-uploadArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
-    if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
-});
-
-function handleFile(file) {
-    if (file.size > 10 * 1024 * 1024) {
-        showError('檔案太大，請選擇小於 10MB 的檔案');
-        return;
-    }
-    selectedFile = file;
-    fileName.textContent = file.name;
-    fileSize.textContent = formatFileSize(file.size);
-    fileInfo.classList.add('show');
-    uploadBtn.textContent = '開始上傳';
-    uploadBtn.disabled = false;
-    cancelBtn.style.display = 'block';
-    status.textContent = '準備上傳...';
-    progressFill.style.width = '0%';
-    errorMessage.style.display = 'none';
-    successMessage.style.display = 'none';
-}
-
-uploadBtn.addEventListener('click', () => {
-    if (selectedFile) uploadFile();
-    else fileInput.click();
-});
-cancelBtn.addEventListener('click', () => {
-    selectedFile = null;
-    fileInfo.classList.remove('show');
-    uploadBtn.textContent = '選擇檔案';
-    uploadBtn.disabled = true;
-    cancelBtn.style.display = 'none';
-    fileInput.value = '';
-    errorMessage.style.display = 'none';
-    successMessage.style.display = 'none';
-});
-
-async function uploadFile() {
-    if (!selectedFile) return;
-    uploadBtn.disabled = true;
-    uploadBtn.textContent = '上傳中...';
-    status.textContent = '正在上傳檔案...';
-
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-        progress += Math.random() * 15;
-        if (progress > 90) progress = 90;
-        progressFill.style.width = progress + '%';
-    }, 200);
-
-    try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
-        const response = await fetch(`${API_BASE}/api/upload`, {
-            method: 'POST',
-            body: formData
-        });
-
-        clearInterval(progressInterval);
-        progressFill.style.width = '100%';
-
-        const result = await response.json();
-        if (result.success) {
-            status.textContent = '上傳完成！';
-            uploadBtn.textContent = '上傳成功';
-            showSuccess(`檔案 "${result.fileName}" 上傳成功！ 下載連結：${result.fileUrl}`);
-            console.log('上傳結果:', result);
-            setTimeout(() => cancelBtn.click(), 3000);
-        } else {
-            throw new Error(result.error || '上傳失敗');
-        }
-    } catch (error) {
-        clearInterval(progressInterval);
-        progressFill.style.width = '0%';
-        uploadBtn.disabled = false;
-        uploadBtn.textContent = '重試上傳';
-        status.textContent = '上傳失敗';
-        showError(`上傳失敗: ${error.message}`);
-    }
-}
-
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
+// 測試連線
 async function testConnection() {
     try {
-        const healthResponse = await fetch(`${API_BASE}/api/health`);
-        if (healthResponse.ok) {
-            showSuccess('✅ 伺服器連線正常，可以開始上傳檔案');
+        const res = await fetch(`${API_BASE}/api/health`);
+        if (res.ok) {
+            document.getElementById('status').innerText = '✅ 伺服器連線正常';
         } else {
-            showError('❌ 無法連線到伺服器');
+            document.getElementById('status').innerText = '❌ 無法連線到伺服器';
         }
-    } catch (error) {
-        showError('❌ 伺服器連接失敗，請檢查是否啟動');
+    } catch (err) {
+        document.getElementById('status').innerText = '❌ 無法連線到伺服器';
+    }
+}
+
+// 上傳檔案
+async function uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(`${API_BASE}/api/upload`, {
+        method: 'POST',
+        body: formData
+    });
+
+    const data = await res.json();
+    if (data.success) {
+        alert(`檔案上傳成功！下載連結: ${API_BASE}${data.fileUrl}`);
+    } else {
+        alert('上傳失敗');
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(testConnection, 500);
+    testConnection();
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            uploadFile(e.target.files[0]);
+        }
+    });
 });
     </script>
 </body>
