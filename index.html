@@ -351,343 +351,364 @@
     </div>
 
     <script>
-        const uploadArea = document.getElementById('uploadArea');
-        const fileInput = document.getElementById('fileInput');
-        const fileInfo = document.getElementById('fileInfo');
-        const fileName = document.getElementById('fileName');
-        const fileSize = document.getElementById('fileSize');
-        const progressFill = document.getElementById('progressFill');
-        const status = document.getElementById('status');
-        const uploadBtn = document.getElementById('uploadBtn');
-        const cancelBtn = document.getElementById('cancelBtn');
-        const errorMessage = document.getElementById('errorMessage');
-        const successMessage = document.getElementById('successMessage');
+        // 修正後的前端 JavaScript 代碼 (替換 index.html 中的 <script> 內容)
 
-        let selectedFile = null;
-        let fileObjectURL = null;
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+const fileInfo = document.getElementById('fileInfo');
+const fileName = document.getElementById('fileName');
+const fileSize = document.getElementById('fileSize');
+const progressFill = document.getElementById('progressFill');
+const status = document.getElementById('status');
+const uploadBtn = document.getElementById('uploadBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const errorMessage = document.getElementById('errorMessage');
+const successMessage = document.getElementById('successMessage');
 
-        // LIFF 初始化
-        async function initializeLIFF() {
-            try {
-                await liff.init({ liffId: '2007898038-DLkNoLpM' }); // 請替換為您的 LIFF ID
-                console.log('LIFF initialized successfully');
-                
-                if (!liff.isLoggedIn()) {
-                    liff.login();
-                }
-            } catch (error) {
-                console.error('LIFF initialization failed:', error);
-                showError('LINE 初始化失敗，請重新整理頁面');
-            }
+let selectedFile = null;
+let fileObjectURL = null;
+
+// LIFF 初始化
+async function initializeLIFF() {
+    try {
+        await liff.init({ liffId: '2007898038-DLkNoLpM' }); // 請替換為您的 LIFF ID
+        console.log('✅ LIFF initialized successfully');
+        
+        if (!liff.isLoggedIn()) {
+            liff.login();
+        } else {
+            const profile = await liff.getProfile();
+            console.log('👤 用戶資訊:', profile);
+        }
+    } catch (error) {
+        console.error('❌ LIFF initialization failed:', error);
+        showError('LINE 初始化失敗，請重新整理頁面');
+    }
+}
+
+// 顯示錯誤訊息
+function showError(message) {
+    errorMessage.textContent = message;
+    errorMessage.style.display = 'block';
+    successMessage.style.display = 'none';
+    setTimeout(() => {
+        errorMessage.style.display = 'none';
+    }, 5000);
+}
+
+// 顯示成功訊息
+function showSuccess(message) {
+    successMessage.textContent = message;
+    successMessage.style.display = 'block';
+    errorMessage.style.display = 'none';
+    setTimeout(() => {
+        successMessage.style.display = 'none';
+    }, 5000);
+}
+
+// 點擊上傳區域
+uploadArea.addEventListener('click', () => {
+    fileInput.click();
+});
+
+// 檔案選擇
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+    }
+});
+
+// 拖拽事件
+uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.classList.add('dragover');
+});
+
+uploadArea.addEventListener('dragleave', () => {
+    uploadArea.classList.remove('dragover');
+});
+
+uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+    }
+});
+
+// 處理檔案
+function handleFile(file) {
+    console.log('📁 處理檔案:', file.name);
+    
+    // 檢查檔案類型
+    const allowedTypes = ['.pdf', '.doc', '.docx'];
+    const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+    
+    if (!allowedTypes.includes(fileExtension)) {
+        showError('請上傳 PDF、DOC 或 DOCX 格式的檔案');
+        return;
+    }
+
+    // 檢查檔案大小 (限制10MB)
+    if (file.size > 10 * 1024 * 1024) {
+        showError('檔案大小不能超過 10MB');
+        return;
+    }
+
+    // 清理之前的 URL
+    if (fileObjectURL) {
+        URL.revokeObjectURL(fileObjectURL);
+    }
+
+    selectedFile = file;
+    fileName.textContent = file.name;
+    fileSize.textContent = formatFileSize(file.size);
+    
+    fileInfo.classList.add('show');
+    uploadBtn.textContent = '開始上傳';
+    uploadBtn.disabled = false;
+    cancelBtn.style.display = 'block';
+    
+    status.textContent = '準備上傳...';
+    progressFill.style.width = '0%';
+    
+    console.log('✅ 檔案準備完成');
+}
+
+// 上傳按鈕
+uploadBtn.addEventListener('click', () => {
+    if (selectedFile && uploadBtn.textContent === '開始上傳') {
+        uploadFile();
+    } else if (!selectedFile) {
+        fileInput.click();
+    }
+});
+
+// 取消按鈕
+cancelBtn.addEventListener('click', () => {
+    if (fileObjectURL) {
+        URL.revokeObjectURL(fileObjectURL);
+        fileObjectURL = null;
+    }
+    
+    selectedFile = null;
+    fileInfo.classList.remove('show');
+    uploadBtn.textContent = '選擇檔案';
+    uploadBtn.disabled = true;
+    cancelBtn.style.display = 'none';
+    fileInput.value = '';
+    errorMessage.style.display = 'none';
+    successMessage.style.display = 'none';
+});
+
+// 檔案上傳處理
+async function uploadFile() {
+    if (!selectedFile) return;
+
+    console.log('📤 開始上傳檔案:', selectedFile.name);
+    
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = '上傳中...';
+    status.textContent = '正在上傳檔案...';
+    
+    try {
+        // 步驟1: 上傳檔案到服務器
+        console.log('📤 步驟1: 上傳檔案到服務器');
+        
+        // 模擬上傳進度
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            progress += Math.random() * 10;
+            if (progress > 90) progress = 90;
+            progressFill.style.width = progress + '%';
+        }, 100);
+        
+        const serverResponse = await uploadToServer(selectedFile);
+        console.log('✅ 步驟1完成:', serverResponse);
+        
+        // 清除進度動畫並完成
+        clearInterval(progressInterval);
+        progressFill.style.width = '100%';
+        
+        // 步驟2: 發送 LINE 通知
+        console.log('📱 步驟2: 發送 LINE 通知');
+        status.textContent = '發送通知中...';
+        
+        await sendLineNotification({
+            fileName: selectedFile.name,
+            fileSize: selectedFile.size,
+            fileUrl: serverResponse.fileUrl,
+            uploadTime: new Date().toISOString()
+        });
+        
+        console.log('✅ 步驟2完成: LINE 通知已發送');
+        
+        // 完成
+        await handleUploadComplete();
+        
+    } catch (error) {
+        console.error('❌ 上傳過程出錯:', error);
+        showError(`上傳失敗: ${error.message}`);
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '重試上傳';
+        status.textContent = '上傳失敗';
+        progressFill.style.width = '0%';
+    }
+}
+
+// 上傳到服務器 (修正後的版本)
+async function uploadToServer(file) {
+    try {
+        console.log('📤 正在上傳到服務器...');
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('uploadTime', new Date().toISOString());
+        
+        // 如果有 LIFF，添加用戶資訊
+        if (typeof liff !== 'undefined' && liff.isLoggedIn()) {
+            const profile = await liff.getProfile();
+            formData.append('userId', profile.userId);
+            formData.append('displayName', profile.displayName);
         }
 
-        // 顯示錯誤訊息
-        function showError(message) {
-            errorMessage.textContent = message;
-            errorMessage.style.display = 'block';
-            successMessage.style.display = 'none';
-            setTimeout(() => {
-                errorMessage.style.display = 'none';
-            }, 5000);
-        }
-
-        // 顯示成功訊息
-        function showSuccess(message) {
-            successMessage.textContent = message;
-            successMessage.style.display = 'block';
-            errorMessage.style.display = 'none';
-            setTimeout(() => {
-                successMessage.style.display = 'none';
-            }, 5000);
-        }
-
-        // 點擊上傳區域
-        uploadArea.addEventListener('click', () => {
-            fileInput.click();
+        // 使用正確的 API 端點
+        const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
         });
 
-        // 檔案選擇
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                handleFile(e.target.files[0]);
-            }
-        });
-
-        // 拖拽事件
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
-
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            if (e.dataTransfer.files.length > 0) {
-                handleFile(e.dataTransfer.files[0]);
-            }
-        });
-
-        // 處理檔案
-        function handleFile(file) {
-            // 檢查檔案類型
-            const allowedTypes = ['.pdf', '.doc', '.docx'];
-            const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
-            
-            if (!allowedTypes.includes(fileExtension)) {
-                showError('請上傳 PDF、DOC 或 DOCX 格式的檔案');
-                return;
-            }
-
-            // 檢查檔案大小 (限制10MB)
-            if (file.size > 10 * 1024 * 1024) {
-                showError('檔案大小不能超過 10MB');
-                return;
-            }
-
-            // 清理之前的 URL
-            if (fileObjectURL) {
-                URL.revokeObjectURL(fileObjectURL);
-            }
-
-            selectedFile = file;
-            fileName.textContent = file.name;
-            fileSize.textContent = formatFileSize(file.size);
-            
-            fileInfo.classList.add('show');
-            uploadBtn.textContent = '開始上傳';
-            uploadBtn.disabled = false;
-            cancelBtn.style.display = 'block';
-            
-            status.textContent = '準備上傳...';
-            progressFill.style.width = '0%';
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`上傳失敗 (${response.status}): ${errorText}`);
         }
 
-        // 上傳按鈕
-        uploadBtn.addEventListener('click', () => {
-            if (selectedFile && uploadBtn.textContent === '開始上傳') {
-                uploadFile();
-            } else if (!selectedFile) {
-                fileInput.click();
-            }
-        });
+        const result = await response.json();
+        console.log('✅ 服務器回應:', result);
+        return result;
 
-        // 取消按鈕
-        cancelBtn.addEventListener('click', () => {
-            if (fileObjectURL) {
-                URL.revokeObjectURL(fileObjectURL);
-                fileObjectURL = null;
-            }
-            
-            selectedFile = null;
-            fileInfo.classList.remove('show');
-            uploadBtn.textContent = '選擇檔案';
-            uploadBtn.disabled = true;
-            cancelBtn.style.display = 'none';
-            fileInput.value = '';
-            errorMessage.style.display = 'none';
-            successMessage.style.display = 'none';
-        });
+    } catch (error) {
+        console.error('❌ 上傳到服務器失敗:', error);
+        throw new Error(`服務器上傳失敗: ${error.message}`);
+    }
+}
 
-        // 檔案上傳處理
-        function uploadFile() {
-            if (!selectedFile) return;
-
-            uploadBtn.disabled = true;
-            uploadBtn.textContent = '處理中...';
-            status.textContent = '正在處理檔案...';
-            
-            try {
-                // 創建檔案的 Object URL 作為下載連結
-                fileObjectURL = URL.createObjectURL(selectedFile);
-                
-                // 模擬上傳進度
-                let progress = 0;
-                const interval = setInterval(() => {
-                    progress += Math.random() * 15;
-                    if (progress > 100) progress = 100;
-                    
-                    progressFill.style.width = progress + '%';
-                    
-                    if (progress >= 100) {
-                        clearInterval(interval);
-                        handleUploadComplete();
-                    }
-                }, 150);
-                
-            } catch (error) {
-                console.error('檔案處理失敗:', error);
-                showError('檔案處理失敗，請重試');
-                uploadBtn.disabled = false;
-                uploadBtn.textContent = '開始上傳';
-            }
+// 發送 LINE 通知 (修正後的版本)
+async function sendLineNotification(fileInfo) {
+    try {
+        console.log('📱 準備發送 LINE 通知...');
+        
+        // 獲取用戶 ID
+        let userId = null;
+        if (typeof liff !== 'undefined' && liff.isLoggedIn()) {
+            const profile = await liff.getProfile();
+            userId = profile.userId;
+            console.log('👤 用戶 ID:', userId);
+        } else {
+            console.warn('⚠️ 無法獲取用戶 ID，跳過 LINE 通知');
+            return;
         }
 
-        // 上傳完成處理
-        async function handleUploadComplete() {
-            try {
-                status.textContent = '上傳完成！';
-                uploadBtn.textContent = '上傳成功';
-                uploadBtn.style.background = 'linear-gradient(135deg, #93c5a1, #7fb78a)';
-                
-                // 準備檔案資訊
-                const fileInfo = {
-                    name: selectedFile.name,
-                    size: selectedFile.size,
-                    type: selectedFile.type,
-                    downloadUrl: fileObjectURL,
-                    uploadTime: new Date().toISOString()
-                };
-
-                // 發送 postback message 給 LINE Bot
-                await sendPostbackMessage(fileInfo);
-                
-                showSuccess(`檔案 "${selectedFile.name}" 已成功上傳並傳送給系統處理`);
-                
-                // 5秒後關閉 LIFF 視窗
-                setTimeout(() => {
-                    if (liff.isInClient()) {
-                        liff.closeWindow();
-                    }
-                }, 3000);
-                
-            } catch (error) {
-                console.error('上傳完成處理失敗:', error);
-                showError('檔案上傳失敗，請重試');
-                uploadBtn.disabled = false;
-                uploadBtn.textContent = '重新上傳';
-                uploadBtn.style.background = 'linear-gradient(135deg, #d4c4b0, #c4b5a0)';
-            }
-        }
-
-        // 發送檔案到你的後端服務器
-        async function uploadToServer(file) {
-            try {
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('uploadTime', new Date().toISOString());
-                formData.append('userId', liff.isLoggedIn() ? liff.getDecodedIDToken()?.sub : 'anonymous');
-
-                // 上傳到你的後端服務器
-                const response = await fetch('/api/upload-resume', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error(`上傳失敗: ${response.status}`);
-                }
-
-                const result = await response.json();
-                return result;
-
-            } catch (error) {
-                console.error('上傳到服務器失敗:', error);
-                throw error;
-            }
-        }
-
-        // 發送通知到 LINE Messaging API
-        async function sendToLineBot(fileInfo) {
-            try {
-                const userId = liff.isLoggedIn() ? liff.getDecodedIDToken()?.sub : null;
-                
-                if (!userId) {
-                    throw new Error('無法取得使用者 ID');
-                }
-
-                // 發送到你的後端，由後端呼叫 LINE Messaging API
-                const response = await fetch('/api/line-notification', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        userId: userId,
-                        action: 'resume_uploaded',
-                        fileInfo: {
-                            fileName: fileInfo.fileName,
-                            fileSize: fileInfo.fileSize,
-                            fileUrl: fileInfo.fileUrl,
-                            uploadTime: fileInfo.uploadTime
-                        }
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`通知發送失敗: ${response.status}`);
-                }
-
-                const result = await response.json();
-                console.log('LINE 通知發送成功:', result);
-                return result;
-
-            } catch (error) {
-                console.error('發送 LINE 通知失敗:', error);
-                throw error;
-            }
-        }
-
-        // 發送 postback message 給 LINE Bot
-        async function sendPostbackMessage(fileInfo) {
-            try {
-                // 方法1: 上傳檔案到服務器並獲取永久 URL
-                const serverResponse = await uploadToServer(selectedFile);
-                
-                // 方法2: 發送通知到 LINE Bot
-                await sendToLineBot({
-                    fileName: fileInfo.name,
-                    fileSize: fileInfo.size,
-                    fileUrl: serverResponse.fileUrl, // 從服務器獲取的永久 URL
+        // 使用正確的 API 端點
+        const response = await fetch('/api/notify', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                userId: userId,
+                fileInfo: {
+                    fileName: fileInfo.fileName,
+                    fileSize: fileInfo.fileSize,
+                    fileUrl: fileInfo.fileUrl,
                     uploadTime: fileInfo.uploadTime
-                });
-
-                // 方法3: 使用 LIFF 發送訊息給使用者
-                if (liff.isInClient()) {
-                    await liff.sendMessages([
-                        {
-                            type: 'text',
-                            text: `✅ 履歷上傳完成！\n📄 檔案名稱: ${fileInfo.name}\n📊 檔案大小: ${formatFileSize(fileInfo.size)}\n⏰ 上傳時間: ${new Date().toLocaleString('zh-TW')}`
-                        }
-                    ]);
                 }
-                
-                return serverResponse;
-                
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.warn(`⚠️ LINE 通知發送失敗 (${response.status}): ${errorText}`);
+            // 不拋出錯誤，讓上傳流程繼續
+            return;
+        }
+
+        const result = await response.json();
+        console.log('✅ LINE 通知發送成功:', result);
+        return result;
+
+    } catch (error) {
+        console.warn('⚠️ LINE 通知發送過程出錯:', error);
+        // 不拋出錯誤，讓上傳流程繼續
+    }
+}
+
+// 上傳完成處理
+async function handleUploadComplete() {
+    try {
+        status.textContent = '上傳完成！';
+        uploadBtn.textContent = '上傳成功';
+        uploadBtn.style.background = 'linear-gradient(135deg, #93c5a1, #7fb78a)';
+        
+        showSuccess(`檔案 "${selectedFile.name}" 已成功上傳！`);
+        
+        // 嘗試發送 LIFF 訊息 (如果可用)
+        if (typeof liff !== 'undefined' && liff.isInClient()) {
+            try {
+                await liff.sendMessages([
+                    {
+                        type: 'text',
+                        text: `✅ 履歷上傳完成！\n📄 檔案名稱: ${selectedFile.name}\n📊 檔案大小: ${formatFileSize(selectedFile.size)}\n⏰ 上傳時間: ${new Date().toLocaleString('zh-TW')}`
+                    }
+                ]);
+                console.log('✅ LIFF 訊息發送成功');
             } catch (error) {
-                console.error('發送 postback message 失敗:', error);
-                throw error;
+                console.warn('⚠️ LIFF 訊息發送失敗:', error);
             }
         }
-
-        // 格式化檔案大小
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 Bytes';
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-
-        // 頁面卸載時清理資源
-        window.addEventListener('beforeunload', () => {
-            if (fileObjectURL) {
-                URL.revokeObjectURL(fileObjectURL);
+        
+        // 3秒後關閉 LIFF 視窗
+        setTimeout(() => {
+            if (typeof liff !== 'undefined' && liff.isInClient()) {
+                liff.closeWindow();
             }
-        });
+        }, 3000);
+        
+    } catch (error) {
+        console.error('❌ 完成處理失敗:', error);
+        showError('處理完成時出現錯誤');
+    }
+}
 
-        // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            // 如果是在 LINE 環境中，初始化 LIFF
-            if (typeof liff !== 'undefined') {
-                initializeLIFF();
-            } else {
-                console.warn('LIFF SDK 未載入，某些功能可能無法正常運作');
-            }
-        });
+// 格式化檔案大小
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// 頁面卸載時清理資源
+window.addEventListener('beforeunload', () => {
+    if (fileObjectURL) {
+        URL.revokeObjectURL(fileObjectURL);
+    }
+});
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('📱 頁面載入完成，開始初始化...');
+    
+    // 如果是在 LINE 環境中，初始化 LIFF
+    if (typeof liff !== 'undefined') {
+        initializeLIFF();
+    } else {
+        console.warn('⚠️ LIFF SDK 未載入，某些功能可能無法正常運作');
+    }
+    
+    console.log('✅ 初始化完成');
+});
     </script>
 </body>
 </html>
