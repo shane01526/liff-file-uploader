@@ -351,7 +351,7 @@
     </div>
 
     <script>
-        // 修正後的前端 JavaScript 代碼 (替換 index.html 中的 <script> 內容)
+        // 改良的前端 JavaScript 代碼，加強錯誤處理和調試
 
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
@@ -371,10 +371,12 @@ let fileObjectURL = null;
 // LIFF 初始化
 async function initializeLIFF() {
     try {
+        console.log('🔧 開始初始化 LIFF...');
         await liff.init({ liffId: '2007898038-DLkNoLpM' }); // 請替換為您的 LIFF ID
         console.log('✅ LIFF initialized successfully');
         
         if (!liff.isLoggedIn()) {
+            console.log('🔐 用戶未登入，開始登入流程');
             liff.login();
         } else {
             const profile = await liff.getProfile();
@@ -388,16 +390,18 @@ async function initializeLIFF() {
 
 // 顯示錯誤訊息
 function showError(message) {
+    console.error('🚨 錯誤:', message);
     errorMessage.textContent = message;
     errorMessage.style.display = 'block';
     successMessage.style.display = 'none';
     setTimeout(() => {
         errorMessage.style.display = 'none';
-    }, 5000);
+    }, 8000);
 }
 
 // 顯示成功訊息
 function showSuccess(message) {
+    console.log('✅ 成功:', message);
     successMessage.textContent = message;
     successMessage.style.display = 'block';
     errorMessage.style.display = 'none';
@@ -438,7 +442,12 @@ uploadArea.addEventListener('drop', (e) => {
 
 // 處理檔案
 function handleFile(file) {
-    console.log('📁 處理檔案:', file.name);
+    console.log('📁 處理檔案:', {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: new Date(file.lastModified)
+    });
     
     // 檢查檔案類型
     const allowedTypes = ['.pdf', '.doc', '.docx'];
@@ -486,6 +495,8 @@ uploadBtn.addEventListener('click', () => {
 
 // 取消按鈕
 cancelBtn.addEventListener('click', () => {
+    console.log('🚫 取消上傳');
+    
     if (fileObjectURL) {
         URL.revokeObjectURL(fileObjectURL);
         fileObjectURL = null;
@@ -503,7 +514,10 @@ cancelBtn.addEventListener('click', () => {
 
 // 檔案上傳處理
 async function uploadFile() {
-    if (!selectedFile) return;
+    if (!selectedFile) {
+        console.error('❌ 沒有選擇檔案');
+        return;
+    }
 
     console.log('📤 開始上傳檔案:', selectedFile.name);
     
@@ -515,13 +529,13 @@ async function uploadFile() {
         // 步驟1: 上傳檔案到服務器
         console.log('📤 步驟1: 上傳檔案到服務器');
         
-        // 模擬上傳進度
+        // 開始進度動畫
         let progress = 0;
         const progressInterval = setInterval(() => {
             progress += Math.random() * 10;
             if (progress > 90) progress = 90;
             progressFill.style.width = progress + '%';
-        }, 100);
+        }, 200);
         
         const serverResponse = await uploadToServer(selectedFile);
         console.log('✅ 步驟1完成:', serverResponse);
@@ -530,18 +544,25 @@ async function uploadFile() {
         clearInterval(progressInterval);
         progressFill.style.width = '100%';
         
-        // 步驟2: 發送 LINE 通知
-        console.log('📱 步驟2: 發送 LINE 通知');
-        status.textContent = '發送通知中...';
-        
-        await sendLineNotification({
-            fileName: selectedFile.name,
-            fileSize: selectedFile.size,
-            fileUrl: serverResponse.fileUrl,
-            uploadTime: new Date().toISOString()
-        });
-        
-        console.log('✅ 步驟2完成: LINE 通知已發送');
+        // 步驟2: 發送 LINE 通知（如果可用）
+        if (typeof liff !== 'undefined' && liff.isLoggedIn()) {
+            console.log('📱 步驟2: 發送 LINE 通知');
+            status.textContent = '發送通知中...';
+            
+            try {
+                await sendLineNotification({
+                    fileName: selectedFile.name,
+                    fileSize: selectedFile.size,
+                    fileUrl: serverResponse.fileUrl,
+                    uploadTime: new Date().toISOString()
+                });
+                console.log('✅ 步驟2完成: LINE 通知已發送');
+            } catch (error) {
+                console.warn('⚠️ LINE 通知失敗，但上傳成功:', error);
+            }
+        } else {
+            console.log('ℹ️ 跳過 LINE 通知 (LIFF 不可用或未登入)');
+        }
         
         // 完成
         await handleUploadComplete();
@@ -556,10 +577,15 @@ async function uploadFile() {
     }
 }
 
-// 上傳到服務器 (修正後的版本)
+// 上傳到服務器 (改良版)
 async function uploadToServer(file) {
     try {
-        console.log('📤 正在上傳到服務器...');
+        console.log('📤 準備上傳到服務器...');
+        console.log('📊 檔案資訊:', {
+            name: file.name,
+            size: file.size,
+            type: file.type
+        });
         
         const formData = new FormData();
         formData.append('file', file);
@@ -567,49 +593,88 @@ async function uploadToServer(file) {
         
         // 如果有 LIFF，添加用戶資訊
         if (typeof liff !== 'undefined' && liff.isLoggedIn()) {
-            const profile = await liff.getProfile();
-            formData.append('userId', profile.userId);
-            formData.append('displayName', profile.displayName);
+            try {
+                const profile = await liff.getProfile();
+                formData.append('userId', profile.userId);
+                formData.append('displayName', profile.displayName || '');
+                console.log('👤 添加用戶資訊到請求中');
+            } catch (error) {
+                console.warn('⚠️ 無法獲取用戶資訊:', error);
+            }
         }
 
-        // 使用正確的 API 端點
+        console.log('🌐 發送請求到 /api/upload...');
+
         const response = await fetch('/api/upload', {
             method: 'POST',
             body: formData
         });
 
+        console.log('📡 收到回應:', {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries())
+        });
+
+        // 先獲取回應文本
+        const responseText = await response.text();
+        console.log('📄 原始回應內容:', responseText);
+
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`上傳失敗 (${response.status}): ${errorText}`);
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            
+            try {
+                const errorData = JSON.parse(responseText);
+                errorMessage = errorData.error || errorData.message || errorMessage;
+                console.log('📋 解析的錯誤資訊:', errorData);
+            } catch (e) {
+                console.warn('⚠️ 無法解析錯誤回應為 JSON:', e);
+                errorMessage = responseText || errorMessage;
+            }
+            
+            throw new Error(errorMessage);
         }
 
-        const result = await response.json();
-        console.log('✅ 服務器回應:', result);
+        // 嘗試解析 JSON
+        let result;
+        try {
+            result = JSON.parse(responseText);
+            console.log('✅ 解析服務器回應:', result);
+        } catch (e) {
+            console.error('❌ 無法解析服務器回應為 JSON:', e);
+            console.log('📄 原始內容:', responseText);
+            throw new Error('服務器回應格式錯誤，請檢查服務器日誌');
+        }
+
+        if (!result.success) {
+            throw new Error(result.error || '上傳失敗，原因不明');
+        }
+
         return result;
 
     } catch (error) {
         console.error('❌ 上傳到服務器失敗:', error);
-        throw new Error(`服務器上傳失敗: ${error.message}`);
+        
+        if (error.name === 'TypeError' && error.message.includes('fetch')) {
+            throw new Error('無法連接到服務器，請檢查服務器是否正在運行');
+        }
+        
+        throw error;
     }
 }
 
-// 發送 LINE 通知 (修正後的版本)
+// 發送 LINE 通知 (改良版)
 async function sendLineNotification(fileInfo) {
     try {
         console.log('📱 準備發送 LINE 通知...');
         
         // 獲取用戶 ID
-        let userId = null;
-        if (typeof liff !== 'undefined' && liff.isLoggedIn()) {
-            const profile = await liff.getProfile();
-            userId = profile.userId;
-            console.log('👤 用戶 ID:', userId);
-        } else {
-            console.warn('⚠️ 無法獲取用戶 ID，跳過 LINE 通知');
-            return;
-        }
+        const profile = await liff.getProfile();
+        const userId = profile.userId;
+        console.log('👤 用戶 ID:', userId);
 
-        // 使用正確的 API 端點
+        console.log('🌐 發送請求到 /api/notify...');
+
         const response = await fetch('/api/notify', {
             method: 'POST',
             headers: {
@@ -626,19 +691,29 @@ async function sendLineNotification(fileInfo) {
             })
         });
 
+        const responseText = await response.text();
+        console.log('📡 LINE 通知回應:', {
+            status: response.status,
+            content: responseText
+        });
+
         if (!response.ok) {
-            const errorText = await response.text();
-            console.warn(`⚠️ LINE 通知發送失敗 (${response.status}): ${errorText}`);
-            // 不拋出錯誤，讓上傳流程繼續
-            return;
+            let errorMessage = `HTTP ${response.status}`;
+            try {
+                const errorData = JSON.parse(responseText);
+                errorMessage = errorData.error || errorMessage;
+            } catch (e) {
+                errorMessage = responseText || errorMessage;
+            }
+            throw new Error(errorMessage);
         }
 
-        const result = await response.json();
+        const result = JSON.parse(responseText);
         console.log('✅ LINE 通知發送成功:', result);
         return result;
 
     } catch (error) {
-        console.warn('⚠️ LINE 通知發送過程出錯:', error);
+        console.warn('⚠️ LINE 通知發送失敗:', error);
         // 不拋出錯誤，讓上傳流程繼續
     }
 }
@@ -671,6 +746,8 @@ async function handleUploadComplete() {
         setTimeout(() => {
             if (typeof liff !== 'undefined' && liff.isInClient()) {
                 liff.closeWindow();
+            } else {
+                console.log('ℹ️ 非 LIFF 環境，不關閉視窗');
             }
         }, 3000);
         
@@ -700,15 +777,47 @@ window.addEventListener('beforeunload', () => {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('📱 頁面載入完成，開始初始化...');
     
+    // 檢查必要元素
+    const requiredElements = [
+        'uploadArea', 'fileInput', 'fileInfo', 'fileName', 'fileSize',
+        'progressFill', 'status', 'uploadBtn', 'cancelBtn', 'errorMessage', 'successMessage'
+    ];
+    
+    for (const elementId of requiredElements) {
+        const element = document.getElementById(elementId);
+        if (!element) {
+            console.error(`❌ 找不到必要元素: ${elementId}`);
+        }
+    }
+    
     // 如果是在 LINE 環境中，初始化 LIFF
     if (typeof liff !== 'undefined') {
+        console.log('🟢 LIFF SDK 已載入');
         initializeLIFF();
     } else {
-        console.warn('⚠️ LIFF SDK 未載入，某些功能可能無法正常運作');
+        console.warn('🟡 LIFF SDK 未載入，某些功能可能無法正常運作');
     }
     
     console.log('✅ 初始化完成');
 });
+
+// 調試：檢查服務器連接
+async function checkServerConnection() {
+    try {
+        console.log('🔍 檢查服務器連接...');
+        const response = await fetch('/api/health');
+        const data = await response.json();
+        console.log('✅ 服務器連接正常:', data);
+        return true;
+    } catch (error) {
+        console.error('❌ 服務器連接失敗:', error);
+        showError('無法連接到服務器，請檢查服務器是否正在運行');
+        return false;
+    }
+}
+
+// 頁面載入完成後檢查服務器
+setTimeout(checkServerConnection, 1000);
     </script>
 </body>
 </html>
