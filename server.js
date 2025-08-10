@@ -74,6 +74,73 @@ const upload = multer({
   }
 });
 
+// 🚀 直接發送檔案資訊到 n8n webhook
+async function sendToN8nWebhook(userId, fileName, downloadUrl, fileSize, filePath) {
+  try {
+    if (!process.env.N8N_WEBHOOK_URL) {
+      console.warn('⚠️ N8N_WEBHOOK_URL 未設定');
+      return { success: false, error: 'N8N webhook URL 未設定' };
+    }
+
+    console.log('📤 發送檔案資訊到 n8n:', process.env.N8N_WEBHOOK_URL);
+    
+    const payload = {
+      // 基本檔案資訊
+      userId: userId,
+      fileName: fileName,
+      downloadUrl: downloadUrl,
+      fileSize: fileSize,
+      filePath: filePath,
+      uploadTime: new Date().toISOString(),
+      
+      // 檔案詳細資訊
+      fileExtension: path.extname(fileName).toLowerCase(),
+      fileSizeFormatted: `${(fileSize / 1024 / 1024).toFixed(2)} MB`,
+      
+      // 系統資訊
+      messageType: 'file_upload_completed',
+      source: 'liff_file_uploader',
+      timestamp: Date.now(),
+      
+      // 可選：使用者資訊 (如果你需要)
+      userInfo: {
+        platform: 'LINE',
+        uploadSource: 'LIFF_Web_App'
+      }
+    };
+
+    const response = await axios.post(process.env.N8N_WEBHOOK_URL, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Custom-Source': 'file-upload-system',
+        'X-Webhook-Type': 'file_analysis',
+        'User-Agent': 'LIFF-File-Uploader/1.0'
+      },
+      timeout: 15000 // 15秒超時
+    });
+    
+    console.log('✅ n8n webhook 觸發成功:', response.status);
+    console.log('📝 n8n 回應:', response.data);
+    
+    return { 
+      success: true, 
+      responseStatus: response.status,
+      responseData: response.data 
+    };
+    
+  } catch (error) {
+    console.error('❌ n8n webhook 發送失敗:', error.message);
+    console.error('📍 錯誤詳情:', error.response?.data || error);
+    
+    return { 
+      success: false, 
+      error: error.message,
+      statusCode: error.response?.status,
+      responseData: error.response?.data
+    };
+  }
+}
+
 // LINE Bot 訊息發送函數 - 支援 PostBack 按鈕
 async function sendLineDownloadMessage(userId, fileName, downloadUrl, fileSize) {
   try {
@@ -163,14 +230,39 @@ async function sendSimpleLineMessage(userId, text) {
   });
 }
 
-// LINE Webhook 處理 PostBack 事件
+// 🆕 增強的 LINE Webhook 處理，支援模擬事件識別
 app.post('/api/webhook', async (req, res) => {
-  console.log('📨 收到 LINE Webhook:', JSON.stringify(req.body, null, 2));
+  const isSimulated = req.headers['x-simulated-event'] === 'true';
+  
+  console.log('📨 收到 LINE Webhook:', isSimulated ? '(模擬)' : '(真實)', JSON.stringify(req.body, null, 2));
   
   try {
     const events = req.body.events || [];
     
     for (const event of events) {
+      // 處理文字訊息 (包含模擬的檔案上傳訊息)
+      if (event.type === 'message' && event.message.type === 'text') {
+        const messageText = event.message.text;
+        
+        // 檢查是否為檔案上傳相關訊息
+        if (messageText.includes('檔案上傳完成') || messageText.includes('#檔案分析')) {
+          console.log('📄 檢測到檔案上傳訊息:', messageText);
+          
+          // 這裡你可以添加自己的處理邏輯
+          // 例如：解析檔案資訊、觸發分析流程等
+          
+          if (isSimulated) {
+            console.log('🤖 這是模擬的使用者訊息，可以觸發你的 n8n 流程');
+          }
+          
+          // 可選：回應確認訊息
+          if (event.replyToken && !isSimulated) {
+            await replyToLineMessage(event.replyToken, '✅ 檔案訊息已收到，開始進行分析...');
+          }
+        }
+      }
+      
+      // 處理 PostBack 事件
       if (event.type === 'postback') {
         console.log('🔄 處理 PostBack:', event.postback.data);
         
@@ -206,6 +298,32 @@ app.post('/api/webhook', async (req, res) => {
   }
 });
 
+// 🆕 LINE 回應訊息函數
+async function replyToLineMessage(replyToken, text) {
+  try {
+    if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+      console.warn('⚠️ LINE Token 未設定，無法回應');
+      return false;
+    }
+
+    await axios.post('https://api.line.me/v2/bot/message/reply', {
+      replyToken: replyToken,
+      messages: [{ type: 'text', text: text }]
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('✅ LINE 回應訊息發送成功');
+    return true;
+  } catch (error) {
+    console.error('❌ LINE 回應訊息失敗:', error.response?.data || error.message);
+    return false;
+  }
+}
+
 // 檔案刪除處理
 async function handleFileDelete(userId, fileName) {
   try {
@@ -239,7 +357,8 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     port: PORT,
     uploadDir: uploadDir,
-    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'
+    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定',
+    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定' : '未設定'
   });
 });
 
@@ -252,7 +371,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// 檔案上傳 API
+// 🆕 簡化的檔案上傳 API - 直接發送到 n8n
 app.post('/api/upload', (req, res) => {
   console.log('📤 上傳請求');
   
@@ -288,10 +407,34 @@ app.post('/api/upload', (req, res) => {
         uploadTime: new Date().toISOString()
       };
 
-      // 發送 LINE PostBack 訊息
       const userId = req.body.userId;
+
+      // 🚀 直接發送到 n8n webhook 進行分析
+      if (userId && process.env.N8N_WEBHOOK_URL) {
+        console.log('📤 發送檔案資訊到 n8n 進行分析...');
+        const n8nResult = await sendToN8nWebhook(
+          userId, 
+          req.file.originalname, 
+          downloadUrl, 
+          req.file.size,
+          req.file.path
+        );
+        
+        result.n8nSent = n8nResult.success;
+        result.n8nResponse = n8nResult.responseData;
+        
+        if (!n8nResult.success) {
+          result.n8nError = n8nResult.error;
+          console.warn('⚠️ n8n webhook 失敗，但檔案上傳成功');
+        }
+      } else if (!process.env.N8N_WEBHOOK_URL) {
+        console.warn('⚠️ N8N_WEBHOOK_URL 未設定，跳過 n8n 通知');
+        result.n8nSkipped = 'N8N_WEBHOOK_URL not configured';
+      }
+
+      // 可選：發送 LINE 通知給使用者
       if (userId && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-        console.log('📱 發送 PostBack 訊息給:', userId);
+        console.log('📱 發送成功通知給使用者:', userId);
         result.lineSent = await sendLineDownloadMessage(
           userId, 
           req.file.originalname, 
@@ -420,6 +563,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`📁 上傳目錄: ${uploadDir}`);
   console.log(`📱 LINE Token: ${process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'}`);
   console.log(`🔗 Webhook URL: ${process.env.FRONTEND_URL || 'http://localhost:' + PORT}/api/webhook`);
+  console.log(`🤖 n8n Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
+  console.log('🔧 設定 N8N_WEBHOOK_URL 環境變數來啟用檔案分析功能');
   console.log('================================');
 });
 
