@@ -1,4 +1,80 @@
-// 在 server.js 中添加以下增強功能
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const axios = require('axios');
+
+// 載入環境變數
+if (fs.existsSync('.env')) {
+  require('dotenv').config();
+}
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+console.log('🚀 啟動伺服器...');
+console.log('📍 Port:', PORT);
+console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
+
+// 基本中介軟體
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-line-userid', 'x-line-signature']
+}));
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// 請求日誌
+app.use((req, res, next) => {
+  console.log(`📝 ${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
+// 建立 uploads 資料夾
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+  console.log('📁 建立 uploads 資料夾:', uploadDir);
+}
+
+// Multer 設定
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const uniqueName = `${timestamp}-${file.originalname}`;
+    cb(null, uniqueName);
+  }
+});
+
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    const allowedExts = ['.pdf', '.doc', '.docx'];
+    const fileExt = path.extname(file.originalname).toLowerCase();
+    
+    if (allowedTypes.includes(file.mimetype) || allowedExts.includes(fileExt)) {
+      cb(null, true);
+    } else {
+      cb(new Error('不支援的檔案格式'));
+    }
+  }
+});
+
+// === LINE Bot 功能函數 ===
 
 // 模擬用戶發送訊息給 LINE Bot 的函數
 async function simulateUserMessageToBot(userId, downloadUrl, fileName, fileSize) {
@@ -10,7 +86,7 @@ async function simulateUserMessageToBot(userId, downloadUrl, fileName, fileSize)
 
     console.log('🤖 模擬用戶發送檔案下載訊息給 Bot');
 
-    // 方法 1: 使用 PostBack 模擬用戶動作（推薦）
+    // 方法 1: 直接處理檔案上傳事件（模擬 webhook 接收）
     const postbackData = {
       action: 'file_uploaded',
       fileName: fileName,
@@ -20,7 +96,6 @@ async function simulateUserMessageToBot(userId, downloadUrl, fileName, fileSize)
       userId: userId
     };
 
-    // 直接處理檔案上傳事件（模擬 webhook 接收）
     await handleFileUploadedEvent(postbackData);
 
     // 方法 2: 發送豐富的互動式訊息
@@ -37,9 +112,6 @@ async function simulateUserMessageToBot(userId, downloadUrl, fileName, fileSize)
 async function handleFileUploadedEvent(data) {
   try {
     console.log('🎯 處理檔案上傳事件:', data.fileName);
-    
-    // 可以在這裡觸發 Bot 的回應邏輯
-    // 例如：分析檔案、發送確認訊息、記錄到資料庫等
     
     // 模擬 Bot 收到用戶分享檔案的情境
     const botResponse = generateBotResponse(data);
@@ -218,6 +290,23 @@ async function sendInteractiveFileMessage(userId, fileName, downloadUrl, fileSiz
   }
 }
 
+// 簡單文字訊息發送
+async function sendSimpleLineMessage(userId, text) {
+  try {
+    await axios.post('https://api.line.me/v2/bot/message/push', {
+      to: userId,
+      messages: [{ type: 'text', text: text }]
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (error) {
+    console.error('❌ 發送簡單訊息失敗:', error.response?.data || error.message);
+  }
+}
+
 // 簡單檔案通知（備用）
 async function sendSimpleFileNotification(userId, fileName, downloadUrl, fileSize) {
   const message = `🎉 檔案上傳完成！\n\n📁 檔案：${fileName}\n💾 大小：${(fileSize / 1024 / 1024).toFixed(2)} MB\n🕐 時間：${new Date().toLocaleString('zh-TW')}\n\n📥 下載連結：\n${downloadUrl}\n\n💡 點擊連結即可下載檔案`;
@@ -225,7 +314,88 @@ async function sendSimpleFileNotification(userId, fileName, downloadUrl, fileSiz
   await sendSimpleLineMessage(userId, message);
 }
 
-// 增強的 Webhook 處理，支援更多 PostBack 動作
+// Bot 處理檔案的模擬功能
+async function handleBotProcessFile(userId, data) {
+  try {
+    console.log('🤖 Bot 開始處理檔案:', data.fileName);
+    
+    // 發送處理中訊息
+    await sendSimpleLineMessage(userId, '🤖 收到！讓我來分析您的檔案...');
+    
+    // 模擬處理時間
+    setTimeout(async () => {
+      const processingResults = [
+        '✅ 檔案格式檢查完成，格式正確！',
+        '📊 檔案大小適中，處理順利',
+        '🔍 檔案內容已掃描，未發現異常',
+        '💾 檔案已安全儲存在我們的系統中',
+        '🎯 檔案處理完畢！您可以隨時重新下載'
+      ];
+      
+      for (const result of processingResults) {
+        await sendSimpleLineMessage(userId, result);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 間隔1秒
+      }
+      
+      // 最終結果
+      await sendSimpleLineMessage(userId, 
+        `🎉 檔案「${data.fileName}」處理完成！\n\n如需重新下載：\n${data.url}`
+      );
+      
+    }, 2000);
+    
+  } catch (error) {
+    console.error('❌ Bot 處理檔案失敗:', error);
+    await sendSimpleLineMessage(userId, '❌ 檔案處理時發生錯誤，請稍後再試');
+  }
+}
+
+// 檔案刪除處理
+async function handleFileDelete(userId, fileName) {
+  try {
+    const files = fs.readdirSync(uploadDir);
+    const targetFile = files.find(file => file.includes(fileName.replace(/\.[^/.]+$/, "")));
+    
+    if (targetFile) {
+      const filePath = path.join(uploadDir, targetFile);
+      fs.unlinkSync(filePath);
+      
+      await sendSimpleLineMessage(userId, `🗑️ 檔案 "${fileName}" 已成功刪除`);
+      console.log('🗑️ 檔案已刪除:', targetFile);
+    } else {
+      await sendSimpleLineMessage(userId, `❌ 找不到檔案 "${fileName}"，可能已經被刪除`);
+    }
+    
+  } catch (error) {
+    console.error('❌ 刪除檔案錯誤:', error);
+    await sendSimpleLineMessage(userId, `❌ 刪除檔案時發生錯誤：${error.message}`);
+  }
+}
+
+// === API 路由 ===
+
+// 健康檢查
+app.get('/api/health', (req, res) => {
+  console.log('❤️ 健康檢查');
+  res.json({ 
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    port: PORT,
+    uploadDir: uploadDir,
+    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'
+  });
+});
+
+// 測試 API
+app.get('/api/test', (req, res) => {
+  console.log('🧪 測試 API');
+  res.json({ 
+    message: '伺服器正常運作',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// LINE Webhook 處理
 app.post('/api/webhook', async (req, res) => {
   console.log('📨 收到 LINE Webhook:', JSON.stringify(req.body, null, 2));
   
@@ -268,14 +438,14 @@ app.post('/api/webhook', async (req, res) => {
         }
       }
       
-      // 處理文字訊息（模擬用戶主動詢問）
+      // 處理文字訊息
       if (event.type === 'message' && event.message.type === 'text') {
         const messageText = event.message.text.toLowerCase();
         
         if (messageText.includes('檔案') || messageText.includes('下載') || messageText.includes('file')) {
           await sendSimpleLineMessage(userId, 
             '🤖 您是想要上傳或下載檔案嗎？\n\n請使用我們的上傳系統：\n' + 
-            (process.env.FRONTEND_URL || 'http://localhost:10000')
+            (process.env.FRONTEND_URL || 'http://localhost:' + PORT)
           );
         }
       }
@@ -289,43 +459,7 @@ app.post('/api/webhook', async (req, res) => {
   }
 });
 
-// Bot 處理檔案的模擬功能
-async function handleBotProcessFile(userId, data) {
-  try {
-    console.log('🤖 Bot 開始處理檔案:', data.fileName);
-    
-    // 發送處理中訊息
-    await sendSimpleLineMessage(userId, '🤖 收到！讓我來分析您的檔案...');
-    
-    // 模擬處理時間
-    setTimeout(async () => {
-      const processingResults = [
-        '✅ 檔案格式檢查完成，格式正確！',
-        '📊 檔案大小適中，處理順利',
-        '🔍 檔案內容已掃描，未發現異常',
-        '💾 檔案已安全儲存在我們的系統中',
-        '🎯 檔案處理完畢！您可以隨時重新下載'
-      ];
-      
-      for (const result of processingResults) {
-        await sendSimpleLineMessage(userId, result);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 間隔1秒
-      }
-      
-      // 最終結果
-      await sendSimpleLineMessage(userId, 
-        `🎉 檔案「${data.fileName}」處理完成！\n\n如需重新下載：\n${data.url}`
-      );
-      
-    }, 2000);
-    
-  } catch (error) {
-    console.error('❌ Bot 處理檔案失敗:', error);
-    await sendSimpleLineMessage(userId, '❌ 檔案處理時發生錯誤，請稍後再試');
-  }
-}
-
-// 修改上傳 API，加入模擬用戶訊息功能
+// 檔案上傳 API
 app.post('/api/upload', (req, res) => {
   console.log('📤 上傳請求');
   
@@ -384,7 +518,80 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// 新增測試 PostBack 的 API
+// 檔案下載 API
+app.get('/api/download/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(uploadDir, filename);
+    
+    console.log('📥 下載請求:', filename);
+    
+    if (!fs.existsSync(filePath)) {
+      console.log('❌ 檔案不存在:', filename);
+      return res.status(404).json({ error: '檔案不存在' });
+    }
+    
+    // 設定適當的 Content-Type
+    const ext = path.extname(filename).toLowerCase();
+    let contentType = 'application/octet-stream';
+    
+    switch (ext) {
+      case '.pdf':
+        contentType = 'application/pdf';
+        break;
+      case '.doc':
+        contentType = 'application/msword';
+        break;
+      case '.docx':
+        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        break;
+    }
+    
+    // 取得原始檔名（去掉時間戳）
+    const originalName = filename.replace(/^\d+-/, '');
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(originalName)}`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    
+    console.log('✅ 開始下載:', originalName);
+    res.sendFile(filePath);
+    
+  } catch (error) {
+    console.error('❌ 下載錯誤:', error);
+    res.status(500).json({ error: '下載失敗' });
+  }
+});
+
+// 列出檔案
+app.get('/api/files', (req, res) => {
+  try {
+    if (!fs.existsSync(uploadDir)) {
+      return res.json({ files: [] });
+    }
+    
+    const files = fs.readdirSync(uploadDir).map(filename => {
+      const filePath = path.join(uploadDir, filename);
+      const stats = fs.statSync(filePath);
+      const originalName = filename.replace(/^\d+-/, '');
+      
+      return {
+        filename: originalName,
+        savedName: filename,
+        size: stats.size,
+        uploadTime: stats.birthtime,
+        downloadUrl: `/api/download/${filename}`
+      };
+    });
+    
+    res.json({ files });
+  } catch (error) {
+    console.error('❌ 列出檔案錯誤:', error);
+    res.status(500).json({ error: '無法列出檔案' });
+  }
+});
+
+// 測試 PostBack API
 app.post('/api/test-postback', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -441,4 +648,49 @@ app.post('/api/test-postback', async (req, res) => {
     console.error('❌ 測試 PostBack 失敗:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// 靜態檔案服務
+app.use('/uploads', express.static(uploadDir));
+app.use(express.static(__dirname));
+
+// 根路由
+app.get('/', (req, res) => {
+  console.log('🏠 根路由請求');
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Catch-all 路由
+app.get('*', (req, res) => {
+  console.log('🔍 未匹配路由:', req.url);
+  if (req.url.startsWith('/api/')) {
+    res.status(404).json({ error: 'API 路由不存在' });
+  } else {
+    res.sendFile(path.join(__dirname, 'index.html'));
+  }
+});
+
+// 錯誤處理
+app.use((err, req, res, next) => {
+  console.error('❌ 全域錯誤:', err);
+  res.status(500).json({ error: '伺服器錯誤' });
+});
+
+// 啟動伺服器
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log('🎉 伺服器啟動成功！');
+  console.log(`🌐 URL: http://localhost:${PORT}`);
+  console.log(`📁 上傳目錄: ${uploadDir}`);
+  console.log(`📱 LINE Token: ${process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'}`);
+  console.log(`🔗 Webhook URL: ${process.env.FRONTEND_URL || 'http://localhost:' + PORT}/api/webhook`);
+  console.log('================================');
+});
+
+// 優雅關閉
+process.on('SIGTERM', () => {
+  console.log('📴 收到 SIGTERM，正在關閉伺服器...');
+  server.close(() => {
+    console.log('✅ 伺服器已關閉');
+    process.exit(0);
+  });
 });
