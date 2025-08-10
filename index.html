@@ -353,46 +353,7 @@
     <script>
         const API_BASE = 'https://liff-file-uploader.onrender.com';
         fetch(`${API_BASE}/api/health`)
-// 測試連線
-async function testConnection() {
-    try {
-        const res = await fetch(`${API_BASE}/api/health`);
-        if (res.ok) {
-            document.getElementById('status').innerText = '✅ 伺服器連線正常';
-        } else {
-            document.getElementById('status').innerText = '❌ 無法連線到伺服器';
-        }
-    } catch (err) {
-        document.getElementById('status').innerText = '❌ 無法連線到伺服器';
-    }
-}
-
-// 上傳檔案
-async function uploadFile(file) {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const res = await fetch(`${API_BASE}/api/upload`, {
-        method: 'POST',
-        body: formData
-    });
-
-    const data = await res.json();
-    if (data.success) {
-        alert(`檔案上傳成功！下載連結: ${API_BASE}${data.fileUrl}`);
-    } else {
-        alert('上傳失敗');
-    }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    testConnection();
-    document.getElementById('fileInput').addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            uploadFile(e.target.files[0]);
-        }
-    });
-});
+        
         // 修復版簡化前端代碼
 console.log('🚀 載入修復版前端代碼');
 
