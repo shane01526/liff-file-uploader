@@ -563,40 +563,99 @@
             }
         }
 
+        // 發送檔案到你的後端服務器
+        async function uploadToServer(file) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('uploadTime', new Date().toISOString());
+                formData.append('userId', liff.isLoggedIn() ? liff.getDecodedIDToken()?.sub : 'anonymous');
+
+                // 上傳到你的後端服務器
+                const response = await fetch('/api/upload-resume', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`上傳失敗: ${response.status}`);
+                }
+
+                const result = await response.json();
+                return result;
+
+            } catch (error) {
+                console.error('上傳到服務器失敗:', error);
+                throw error;
+            }
+        }
+
+        // 發送通知到 LINE Messaging API
+        async function sendToLineBot(fileInfo) {
+            try {
+                const userId = liff.isLoggedIn() ? liff.getDecodedIDToken()?.sub : null;
+                
+                if (!userId) {
+                    throw new Error('無法取得使用者 ID');
+                }
+
+                // 發送到你的後端，由後端呼叫 LINE Messaging API
+                const response = await fetch('/api/line-notification', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        userId: userId,
+                        action: 'resume_uploaded',
+                        fileInfo: {
+                            fileName: fileInfo.fileName,
+                            fileSize: fileInfo.fileSize,
+                            fileUrl: fileInfo.fileUrl,
+                            uploadTime: fileInfo.uploadTime
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`通知發送失敗: ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('LINE 通知發送成功:', result);
+                return result;
+
+            } catch (error) {
+                console.error('發送 LINE 通知失敗:', error);
+                throw error;
+            }
+        }
+
         // 發送 postback message 給 LINE Bot
         async function sendPostbackMessage(fileInfo) {
             try {
-                if (!liff.isLoggedIn()) {
-                    throw new Error('用戶未登入');
-                }
-
-                // 創建 postback data
-                const postbackData = {
-                    action: 'resume_uploaded',
+                // 方法1: 上傳檔案到服務器並獲取永久 URL
+                const serverResponse = await uploadToServer(selectedFile);
+                
+                // 方法2: 發送通知到 LINE Bot
+                await sendToLineBot({
                     fileName: fileInfo.name,
                     fileSize: fileInfo.size,
-                    fileType: fileInfo.type,
-                    downloadUrl: fileInfo.downloadUrl,
-                    uploadTime: fileInfo.uploadTime,
-                    userId: liff.getDecodedIDToken()?.sub || 'unknown'
-                };
+                    fileUrl: serverResponse.fileUrl, // 從服務器獲取的永久 URL
+                    uploadTime: fileInfo.uploadTime
+                });
 
-                // 使用 LIFF 發送 postback message
-                await liff.sendMessages([
-                    {
-                        type: 'text',
-                        text: `履歷上傳完成！\n檔案名稱: ${fileInfo.name}\n檔案大小: ${formatFileSize(fileInfo.size)}`
-                    }
-                ]);
-
-                // 也可以使用 postback action (如果您的 Bot 支援)
-                // 注意：由於瀏覽器安全限制，實際的檔案下載 URL 只能在同一個瀏覽器 session 中使用
-                console.log('Postback data prepared:', postbackData);
+                // 方法3: 使用 LIFF 發送訊息給使用者
+                if (liff.isInClient()) {
+                    await liff.sendMessages([
+                        {
+                            type: 'text',
+                            text: `✅ 履歷上傳完成！\n📄 檔案名稱: ${fileInfo.name}\n📊 檔案大小: ${formatFileSize(fileInfo.size)}\n⏰ 上傳時間: ${new Date().toLocaleString('zh-TW')}`
+                        }
+                    ]);
+                }
                 
-                // 將檔案資訊存儲到全域物件，供後續使用
-                window.uploadedFileInfo = postbackData;
-                
-                return postbackData;
+                return serverResponse;
                 
             } catch (error) {
                 console.error('發送 postback message 失敗:', error);
