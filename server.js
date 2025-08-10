@@ -1,125 +1,57 @@
-const cors = require('cors');
-app.use(cors());
-
-require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const multer = require('multer');
-const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const port = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
-// 基本中介軟體
-app.use(express.json());
-app.use(express.static('.')); // 提供 index.html
-app.use('/uploads', express.static('./uploads')); // 提供上傳的檔案
+// 允許跨域請求
+app.use(cors());
 
-// 確保上傳目錄存在
-const uploadDir = './uploads';
+// 靜態檔案（前端 index.html）
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 建立 uploads 資料夾
+const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
+  fs.mkdirSync(uploadDir);
 }
 
-// 上傳配置
+// Multer 上傳設定
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => {
-        const uniqueName = Date.now() + '-' + file.originalname;
-        cb(null, uniqueName);
-    }
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + '-' + file.originalname;
+    cb(null, uniqueName);
+  }
 });
-const upload = multer({
-    storage,
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB
-});
+const upload = multer({ storage });
 
-// 上傳端點
-app.post('/api/upload', (req, res) => {
-    upload.single('file')(req, res, (err) => {
-        if (err) {
-            return res.status(400).json({ success: false, error: err.message });
-        }
-        if (!req.file) {
-            return res.status(400).json({ success: false, error: '沒有收到檔案' });
-        }
-
-        const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-        const fileInfo = {
-            fileName: req.file.originalname,
-            fileUrl,
-            fileSize: req.file.size,
-            uploadTime: new Date().toISOString()
-        };
-
-        res.json({ success: true, ...fileInfo });
-
-        // 可選：自動發送 LINE 通知
-        if (process.env.LINE_CHANNEL_ACCESS_TOKEN && req.query.userId) {
-            sendLineNotify(req.query.userId, fileInfo);
-        }
-    });
-});
-
-// 下載端點
-app.get('/api/download/:filename', (req, res) => {
-    const filePath = path.join(uploadDir, req.params.filename);
-    if (fs.existsSync(filePath)) {
-        res.download(filePath);
-    } else {
-        res.status(404).json({ success: false, error: '檔案不存在' });
-    }
-});
-
-// LINE 通知端點
-app.post('/api/notify', async (req, res) => {
-    try {
-        const { userId, fileInfo } = req.body;
-        if (!userId || !fileInfo) {
-            return res.status(400).json({ success: false, error: '缺少 userId 或 fileInfo' });
-        }
-        await sendLineNotify(userId, fileInfo);
-        res.json({ success: true, message: 'LINE 通知發送成功' });
-    } catch (error) {
-        res.status(500).json({ success: false, error: 'LINE 通知失敗', details: error.message });
-    }
-});
-
-// 健康檢查
+// 健康檢查 API
 app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        uploadDir,
-        hasLineToken: !!process.env.LINE_CHANNEL_ACCESS_TOKEN
-    });
+  res.json({ status: 'ok' });
 });
 
-// 發送 LINE 訊息的輔助函數
-async function sendLineNotify(userId, fileInfo) {
-    const message = `📄 檔案名稱: ${fileInfo.fileName}\n🔗 下載連結: ${fileInfo.fileUrl}`;
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-        to: userId,
-        messages: [{ type: 'text', text: message }]
-    }, {
-        headers: { 'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }
-    });
-}
-
-// 全局錯誤處理
-app.use((err, req, res, next) => {
-    console.error('全局錯誤:', err);
-    res.status(500).json({ success: false, error: '服務器內部錯誤', message: err.message });
+// 上傳 API
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: '沒有檔案' });
+  }
+  const fileUrl = `/uploads/${req.file.filename}`;
+  res.json({
+    success: true,
+    fileName: req.file.filename,
+    fileUrl
+  });
 });
 
-// 404 處理
-app.use('*', (req, res) => {
-    res.status(404).json({ success: false, error: '找不到資源', path: req.originalUrl });
-});
+// 靜態提供 uploads
+app.use('/uploads', express.static(uploadDir));
 
-// 啟動服務器
-app.listen(port, () => {
-    console.log(`🚀 服務器啟動成功：http://localhost:${port}`);
+// 啟動 server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
