@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 10000;
 console.log('🚀 啟動伺服器...');
 console.log('📍 Port:', PORT);
 console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
+console.log('🤖 N8N Webhook URL:', process.env.N8N_WEBHOOK_URL || '未設定');
 
 // 基本中介軟體
 app.use(cors({
@@ -74,192 +75,149 @@ const upload = multer({
   }
 });
 
-// ============= 新增：模擬用戶 PostBack 功能 =============
+// ============= 模擬用戶訊息發送到 N8N Webhook =============
 
-// 模擬用戶發送 PostBack 到自己的 Webhook
-async function simulateUserPostbackToWebhook(userId, downloadUrl, fileName, fileSize) {
+/**
+ * 模擬用戶發送包含檔案資訊的訊息到 LINE Bot
+ * 這個函數會建構一個模擬的 LINE Webhook 事件，包含檔案下載連結
+ */
+async function simulateUserMessageToBot(userId, fileInfo) {
   try {
-    console.log('🎭 模擬用戶發送 PostBack 訊息到 Webhook');
-    
-    // 構造模擬的 LINE Webhook 事件
-    const mockWebhookEvent = {
+    console.log('🎭 模擬用戶發送檔案訊息到 LINE Bot');
+    console.log('📄 檔案資訊:', fileInfo);
+
+    // 構造模擬的 LINE Webhook 事件結構
+    const simulatedLineEvent = {
       events: [
         {
-          type: 'postback',
+          type: 'message',
           mode: 'active',
           timestamp: Date.now(),
           source: {
             type: 'user',
             userId: userId
           },
-          postback: {
-            data: JSON.stringify({
-              action: 'file_uploaded',
-              fileName: fileName,
-              downloadUrl: downloadUrl,
-              fileSize: fileSize,
-              uploadTime: new Date().toISOString(),
-              source: 'file_upload_system'
-            }),
-            params: {}
+          message: {
+            id: `mock_msg_${Date.now()}`,
+            type: 'text',
+            text: `檔案上傳完成: ${fileInfo.fileName}\n下載連結: ${fileInfo.downloadUrl}`
           },
-          replyToken: 'mock_reply_token_' + Date.now()
+          replyToken: `mock_reply_${Date.now()}`,
+          // 自定義資料 - 包含完整檔案資訊
+          customData: {
+            action: 'file_uploaded',
+            fileInfo: fileInfo,
+            source: 'liff_upload_system',
+            timestamp: new Date().toISOString()
+          }
         }
       ],
-      destination: process.env.LINE_BOT_USER_ID || 'mock_destination'
+      destination: process.env.LINE_BOT_USER_ID || 'mock_line_bot'
     };
 
-    console.log('📤 模擬 Webhook 事件:', JSON.stringify(mockWebhookEvent, null, 2));
+    console.log('📤 準備發送到 N8N Webhook:', JSON.stringify(simulatedLineEvent, null, 2));
+
+    // 發送到 N8N Webhook
+    const webhookSuccess = await sendToN8NWebhook(simulatedLineEvent);
     
-    // 直接調用 Webhook 處理函數
-    await processSimulatedWebhookEvent(mockWebhookEvent);
-    
-    return true;
+    // 如果有設定 LINE Bot Token，也可以選擇性發送真實通知
+    let lineNotificationSent = false;
+    if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.SEND_LINE_NOTIFICATION === 'true') {
+      lineNotificationSent = await sendLineNotification(userId, fileInfo);
+    }
+
+    return {
+      webhookSent: webhookSuccess,
+      lineNotificationSent: lineNotificationSent,
+      simulatedEvent: simulatedLineEvent
+    };
+
   } catch (error) {
-    console.error('❌ 模擬 PostBack 失敗:', error);
+    console.error('❌ 模擬用戶訊息失敗:', error);
+    return {
+      webhookSent: false,
+      lineNotificationSent: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 發送模擬事件到 N8N Webhook
+ */
+async function sendToN8NWebhook(eventData) {
+  try {
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    
+    if (!webhookUrl) {
+      console.warn('⚠️ N8N_WEBHOOK_URL 環境變數未設定，跳過 webhook 發送');
+      return false;
+    }
+
+    console.log('🔗 發送到 N8N Webhook:', webhookUrl);
+
+    const response = await axios.post(webhookUrl, eventData, {
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'LIFF-File-Uploader/1.0',
+        // 可以加入驗證標頭
+        'X-Source': 'liff-upload-system',
+        'X-Timestamp': Date.now().toString()
+      },
+      timeout: 10000 // 10秒超時
+    });
+
+    console.log('✅ N8N Webhook 回應:', response.status, response.data);
+    return true;
+
+  } catch (error) {
+    console.error('❌ 發送到 N8N Webhook 失敗:', error.response?.data || error.message);
     return false;
   }
 }
 
-// 處理模擬的 Webhook 事件
-async function processSimulatedWebhookEvent(webhookData) {
-  try {
-    console.log('🔄 處理模擬的 Webhook 事件');
-    
-    const events = webhookData.events || [];
-    
-    for (const event of events) {
-      const userId = event.source.userId;
-      
-      if (event.type === 'postback') {
-        console.log('📨 處理模擬 PostBack:', event.postback.data);
-        
-        const postbackData = JSON.parse(event.postback.data);
-        
-        switch (postbackData.action) {
-          case 'file_uploaded':
-            await handleUserFileUploadEvent(userId, postbackData);
-            break;
-            
-          default:
-            console.log('❓ 未知的模擬 PostBack 動作:', postbackData.action);
-        }
-      }
-    }
-    
-  } catch (error) {
-    console.error('❌ 處理模擬 Webhook 事件失敗:', error);
-  }
-}
-
-// 處理用戶檔案上傳事件（你的業務邏輯）
-async function handleUserFileUploadEvent(userId, data) {
-  try {
-    console.log(`👤 模擬：用戶 ${userId} 上傳了檔案: ${data.fileName}`);
-    console.log('📊 檔案資訊:', {
-      fileName: data.fileName,
-      fileSize: `${(data.fileSize / 1024 / 1024).toFixed(2)} MB`,
-      downloadUrl: data.downloadUrl,
-      uploadTime: data.uploadTime
-    });
-    
-    // 🎯 在這裡添加你的業務邏輯
-    // 例如：記錄到資料庫、發送通知、觸發其他系統等
-    
-    // 如果設定了 LINE Token，回應給用戶
-    if (process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-      await sendLineMessage(userId, 
-        `✅ 收到您上傳的檔案「${data.fileName}」\n\n` +
-        `📊 檔案大小: ${(data.fileSize / 1024 / 1024).toFixed(2)} MB\n` +
-        `🕐 上傳時間: ${new Date(data.uploadTime).toLocaleString('zh-TW')}\n\n` +
-        `🤖 系統正在處理您的檔案...`
-      );
-      
-      // 模擬處理完成通知
-      setTimeout(async () => {
-        await sendLineMessage(userId, 
-          `🎉 檔案「${data.fileName}」處理完成！\n\n` +
-          `📥 下載連結: ${data.downloadUrl}`
-        );
-      }, 3000);
-    }
-    
-  } catch (error) {
-    console.error('❌ 處理用戶檔案上傳事件失敗:', error);
-  }
-}
-
-// 發送 LINE 訊息的輔助函數
-async function sendLineMessage(userId, message) {
-  try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: userId,
-      messages: [{ type: 'text', text: message }]
-    }, {
-      headers: {
-        'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    console.log('📤 LINE 訊息已發送');
-  } catch (error) {
-    console.error('❌ 發送 LINE 訊息失敗:', error.response?.data || error.message);
-  }
-}
-
-// ============= 原有的 LINE Bot 功能 =============
-
-// LINE Bot 訊息發送函數 - 支援 PostBack 按鈕
-async function sendLineDownloadMessage(userId, fileName, downloadUrl, fileSize) {
+/**
+ * 發送 LINE 通知（選用功能）
+ */
+async function sendLineNotification(userId, fileInfo) {
   try {
     if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-      console.warn('⚠️ LINE Token 未設定');
+      console.warn('⚠️ LINE Token 未設定，跳過 LINE 通知');
       return false;
     }
 
-    // 建立帶有下載按鈕的訊息
     const message = {
       type: 'template',
-      altText: `✅ ${fileName} 上傳成功！點擊下載檔案`,
+      altText: `📄 檔案 ${fileInfo.fileName} 上傳完成！`,
       template: {
         type: 'buttons',
-        thumbnailImageUrl: 'https://i.imgur.com/8QmD2Kt.png',
+        thumbnailImageUrl: 'https://img.icons8.com/fluency/96/file.png',
         imageAspectRatio: 'rectangle',
         imageSize: 'cover',
-        imageBackgroundColor: '#F5F3F0',
         title: '📄 檔案上傳成功',
-        text: `檔案：${fileName.length > 30 ? fileName.substring(0, 30) + '...' : fileName}\n大小：${(fileSize / 1024 / 1024).toFixed(2)} MB\n時間：${new Date().toLocaleString('zh-TW')}`,
+        text: `檔案：${fileInfo.fileName.length > 40 ? fileInfo.fileName.substring(0, 40) + '...' : fileInfo.fileName}\n大小：${(fileInfo.fileSize / 1024 / 1024).toFixed(2)} MB\n上傳時間：${new Date(fileInfo.uploadTime).toLocaleString('zh-TW')}`,
         actions: [
           {
             type: 'uri',
             label: '📥 下載檔案',
-            uri: downloadUrl
+            uri: fileInfo.downloadUrl
           },
           {
             type: 'postback',
-            label: '📋 複製連結',
+            label: '📋 檔案資訊',
             data: JSON.stringify({
-              action: 'copy_link',
-              url: downloadUrl,
-              fileName: fileName
+              action: 'file_info',
+              fileName: fileInfo.fileName,
+              fileSize: fileInfo.fileSize,
+              downloadUrl: fileInfo.downloadUrl
             }),
-            displayText: '已複製下載連結'
-          },
-          {
-            type: 'postback',
-            label: '🗑️ 刪除檔案',
-            data: JSON.stringify({
-              action: 'delete_file',
-              fileName: fileName,
-              confirm: true
-            }),
-            displayText: '確認刪除檔案？'
+            displayText: '顯示檔案詳細資訊'
           }
         ]
       }
     };
 
-    const response = await axios.post('https://api.line.me/v2/bot/message/push', {
+    await axios.post('https://api.line.me/v2/bot/message/push', {
       to: userId,
       messages: [message]
     }, {
@@ -269,54 +227,16 @@ async function sendLineDownloadMessage(userId, fileName, downloadUrl, fileSize) 
       }
     });
 
-    console.log('✅ LINE PostBack 訊息發送成功');
+    console.log('✅ LINE 通知發送成功');
     return true;
+
   } catch (error) {
-    console.error('❌ LINE 訊息發送失敗:', error.response?.data || error.message);
+    console.error('❌ LINE 通知發送失敗:', error.response?.data || error.message);
     return false;
   }
 }
 
-// 簡單文字訊息發送（備用）
-async function sendSimpleLineMessage(userId, text) {
-  try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: userId,
-      messages: [{ type: 'text', text: text }]
-    }, {
-      headers: {
-        'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-  } catch (error) {
-    console.error('❌ 發送簡單訊息失敗:', error.response?.data || error.message);
-  }
-}
-
-// 檔案刪除處理
-async function handleFileDelete(userId, fileName) {
-  try {
-    const files = fs.readdirSync(uploadDir);
-    const targetFile = files.find(file => file.includes(fileName.replace(/\.[^/.]+$/, "")));
-    
-    if (targetFile) {
-      const filePath = path.join(uploadDir, targetFile);
-      fs.unlinkSync(filePath);
-      
-      await sendSimpleLineMessage(userId, `🗑️ 檔案 "${fileName}" 已成功刪除`);
-      console.log('🗑️ 檔案已刪除:', targetFile);
-    } else {
-      await sendSimpleLineMessage(userId, `❌ 找不到檔案 "${fileName}"，可能已經被刪除`);
-    }
-    
-  } catch (error) {
-    console.error('❌ 刪除檔案錯誤:', error);
-    await sendSimpleLineMessage(userId, `❌ 刪除檔案時發生錯誤：${error.message}`);
-  }
-}
-
-// ===== API 路由 =====
+// ============= API 路由 =============
 
 // 健康檢查
 app.get('/api/health', (req, res) => {
@@ -326,7 +246,8 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     port: PORT,
     uploadDir: uploadDir,
-    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'
+    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定',
+    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定' : '未設定'
   });
 });
 
@@ -339,50 +260,9 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// LINE Webhook 處理 PostBack 事件
-app.post('/api/webhook', async (req, res) => {
-  console.log('📨 收到 LINE Webhook:', JSON.stringify(req.body, null, 2));
-  
-  try {
-    const events = req.body.events || [];
-    
-    for (const event of events) {
-      if (event.type === 'postback') {
-        console.log('🔄 處理 PostBack:', event.postback.data);
-        
-        const userId = event.source.userId;
-        const postbackData = JSON.parse(event.postback.data);
-        
-        switch (postbackData.action) {
-          case 'copy_link':
-            await sendSimpleLineMessage(userId, 
-              `📋 下載連結已準備好：\n\n${postbackData.url}\n\n檔案：${postbackData.fileName}\n\n長按上方連結可複製到剪貼簿`
-            );
-            break;
-            
-          case 'delete_file':
-            if (postbackData.confirm) {
-              await handleFileDelete(userId, postbackData.fileName);
-            }
-            break;
-            
-          default:
-            console.log('❓ 未知的 PostBack 動作:', postbackData.action);
-        }
-      }
-    }
-    
-    res.status(200).json({ status: 'ok' });
-    
-  } catch (error) {
-    console.error('❌ Webhook 處理錯誤:', error);
-    res.status(200).json({ status: 'error' }); // LINE 需要 200 回應
-  }
-});
-
-// 檔案上傳 API - 修改版本，加入模擬 PostBack
+// 檔案上傳 API - 整合模擬用戶訊息功能
 app.post('/api/upload', (req, res) => {
-  console.log('📤 上傳請求');
+  console.log('📤 收到上傳請求');
   
   upload.single('file')(req, res, async (err) => {
     try {
@@ -407,36 +287,48 @@ app.post('/api/upload', (req, res) => {
       const baseUrl = process.env.FRONTEND_URL || `http://localhost:${PORT}`;
       const downloadUrl = `${baseUrl}/api/download/${req.file.filename}`;
 
-      const result = {
-        success: true,
+      // 準備檔案資訊
+      const fileInfo = {
         fileName: req.file.originalname,
         savedName: req.file.filename,
         fileSize: req.file.size,
         downloadUrl: downloadUrl,
-        uploadTime: new Date().toISOString()
+        uploadTime: new Date().toISOString(),
+        mimeType: req.file.mimetype,
+        fileExtension: path.extname(req.file.originalname)
       };
 
-      // 🎭 模擬用戶發送 PostBack 到 Webhook
-      const userId = req.body.userId;
-      if (userId) {
-        console.log('🎭 開始模擬用戶 PostBack');
-        result.webhookSimulated = await simulateUserPostbackToWebhook(
-          userId, 
-          downloadUrl, 
-          req.file.originalname, 
-          req.file.size
-        );
-      }
+      const result = {
+        success: true,
+        ...fileInfo
+      };
 
-      // 原有的 LINE 訊息發送（可選）
-      if (userId && process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.SEND_ORIGINAL_MESSAGE === 'true') {
-        console.log('📱 發送原有的 LINE 訊息');
-        result.lineSent = await sendLineDownloadMessage(
-          userId, 
-          req.file.originalname, 
-          downloadUrl, 
-          req.file.size
-        );
+      // 取得用戶 ID
+      const userId = req.body.userId;
+      
+      if (userId) {
+        console.log('👤 用戶 ID:', userId);
+        console.log('🎭 開始模擬用戶訊息到 LINE Bot');
+        
+        // 模擬用戶發送訊息到 LINE Bot/N8N
+        const simulationResult = await simulateUserMessageToBot(userId, fileInfo);
+        
+        // 將模擬結果加入回應
+        result.simulation = simulationResult;
+        
+        if (simulationResult.webhookSent) {
+          console.log('🎉 成功模擬用戶訊息並發送到 N8N!');
+        } else {
+          console.warn('⚠️ 模擬訊息發送失敗');
+        }
+        
+      } else {
+        console.warn('⚠️ 沒有提供 userId，跳過模擬用戶訊息');
+        result.simulation = {
+          webhookSent: false,
+          lineNotificationSent: false,
+          error: '沒有提供 userId'
+        };
       }
 
       res.json(result);
@@ -445,7 +337,7 @@ app.post('/api/upload', (req, res) => {
       console.error('❌ 處理錯誤:', error);
       res.status(500).json({ 
         success: false, 
-        error: '伺服器錯誤' 
+        error: '伺服器處理錯誤: ' + error.message 
       });
     }
   });
@@ -457,7 +349,7 @@ app.get('/api/download/:filename', (req, res) => {
     const filename = req.params.filename;
     const filePath = path.join(uploadDir, filename);
     
-    console.log('📥 下載請求:', filename);
+    console.log('📥 檔案下載請求:', filename);
     
     if (!fs.existsSync(filePath)) {
       console.log('❌ 檔案不存在:', filename);
@@ -480,7 +372,7 @@ app.get('/api/download/:filename', (req, res) => {
         break;
     }
     
-    // 取得原始檔名（去掉時間戳）
+    // 取得原始檔名
     const originalName = filename.replace(/^\d+-/, '');
     
     res.setHeader('Content-Type', contentType);
@@ -496,7 +388,7 @@ app.get('/api/download/:filename', (req, res) => {
   }
 });
 
-// 列出檔案
+// 列出檔案 API
 app.get('/api/files', (req, res) => {
   try {
     if (!fs.existsSync(uploadDir)) {
@@ -524,39 +416,61 @@ app.get('/api/files', (req, res) => {
   }
 });
 
-// 測試模擬 PostBack API
-app.post('/api/simulate-postback', async (req, res) => {
+// 測試模擬訊息 API
+app.post('/api/test-simulation', async (req, res) => {
   try {
-    const { userId, fileName, downloadUrl, fileSize } = req.body;
+    const { userId } = req.body;
     
     if (!userId) {
-      return res.status(400).json({ error: '需要 userId' });
+      return res.status(400).json({ error: '需要提供 userId' });
     }
     
-    console.log('🧪 手動測試模擬 PostBack');
+    console.log('🧪 測試模擬用戶訊息');
     
-    const result = await simulateUserPostbackToWebhook(
-      userId, 
-      downloadUrl || 'https://example.com/test.pdf',
-      fileName || 'test.pdf',
-      fileSize || 1024000
-    );
+    // 建立測試檔案資訊
+    const testFileInfo = {
+      fileName: 'test-resume.pdf',
+      savedName: `${Date.now()}-test-resume.pdf`,
+      fileSize: 1024000, // 1MB
+      downloadUrl: `${process.env.FRONTEND_URL || `http://localhost:${PORT}`}/api/download/test-resume.pdf`,
+      uploadTime: new Date().toISOString(),
+      mimeType: 'application/pdf',
+      fileExtension: '.pdf'
+    };
     
-    res.json({ 
-      success: result, 
-      message: result ? '模擬 PostBack 成功' : '模擬 PostBack 失敗'
+    const result = await simulateUserMessageToBot(userId, testFileInfo);
+    
+    res.json({
+      success: true,
+      message: '測試模擬用戶訊息完成',
+      result: result,
+      testFileInfo: testFileInfo
     });
     
   } catch (error) {
-    console.error('❌ 測試模擬 PostBack 失敗:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ 測試模擬訊息失敗:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
 
-// 靜態檔案服務（保留舊的 uploads 路由作為備用）
-app.use('/uploads', express.static(uploadDir));
+// 接收 N8N 或其他系統的回調 (選用)
+app.post('/api/callback', (req, res) => {
+  console.log('📨 收到回調請求:', JSON.stringify(req.body, null, 2));
+  
+  // 處理來自 N8N 或其他系統的回調
+  // 例如：檔案處理完成的通知
+  
+  res.json({
+    status: 'received',
+    timestamp: new Date().toISOString()
+  });
+});
 
-// 提供前端檔案
+// 靜態檔案服務
+app.use('/uploads', express.static(uploadDir));
 app.use(express.static(__dirname));
 
 // 根路由
@@ -584,11 +498,11 @@ app.use((err, req, res, next) => {
 // 啟動伺服器
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('🎉 伺服器啟動成功！');
-  console.log(`🌐 URL: http://localhost:${PORT}`);
-  console.log(`📁 上傳目錄: ${uploadDir}`);
+  console.log(`🌐 Server URL: http://localhost:${PORT}`);
+  console.log(`📁 Upload Directory: ${uploadDir}`);
   console.log(`📱 LINE Token: ${process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'}`);
-  console.log(`🔗 Webhook URL: ${process.env.FRONTEND_URL || 'http://localhost:' + PORT}/api/webhook`);
-  console.log(`🎭 模擬 PostBack: 已啟用`);
+  console.log(`🔗 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
+  console.log(`🎭 User Message Simulation: 已啟用`);
   console.log('================================');
 });
 
