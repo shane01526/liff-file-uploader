@@ -154,12 +154,12 @@ async function convertPDFToImages(pdfPath, outputDir) {
 
     const baseName = path.basename(pdfPath, '.pdf');
     const convert = pdf2pic.fromPath(pdfPath, {
-      density: 200,           // 解析度
+      density: parseInt(process.env.PDF_CONVERT_DENSITY) || 200,
       saveFilename: baseName,
       savePath: outputDir,
-      format: "png",          // 輸出格式
-      width: 1200,           // 寬度
-      height: 1600           // 高度
+      format: process.env.IMAGE_OUTPUT_FORMAT || "png",
+      width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
+      height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600
     });
 
     // 轉換所有頁面
@@ -190,19 +190,17 @@ async function processFileConversion(originalFile) {
     const originalExt = path.extname(originalFile.originalname).toLowerCase();
     
     let pdfPath;
-    let isPdfConverted = false;
 
-    // 步驟 1: 轉換為 PDF（如果不是 PDF）
+    // 步驟 1: 一律轉換為 PDF
+    pdfPath = path.join(pdfDir, `${timestamp}-${originalName}.pdf`);
+    
     if (originalExt === '.pdf') {
-      // 如果已經是 PDF，直接複製到 PDF 目錄
-      pdfPath = path.join(pdfDir, `${timestamp}-${originalName}.pdf`);
+      // 如果已經是 PDF，直接複製
       fs.copyFileSync(originalFile.path, pdfPath);
-      console.log('📄 檔案已是 PDF 格式，直接使用');
+      console.log('📄 檔案已是 PDF 格式，複製到 PDF 目錄');
     } else {
       // DOC/DOCX 轉 PDF
-      pdfPath = path.join(pdfDir, `${timestamp}-${originalName}.pdf`);
       await convertToPDF(originalFile.path, pdfPath);
-      isPdfConverted = true;
     }
 
     // 步驟 2: PDF 轉圖片
@@ -215,21 +213,15 @@ async function processFileConversion(originalFile) {
     const imageFolderName = path.basename(imageOutputDir);
     
     const result = {
-      originalFile: {
-        name: originalFile.originalname,
-        size: originalFile.size,
-        downloadUrl: `${baseUrl}/api/download/original/${originalFile.filename}`
-      },
+      // PDF 檔案資訊
       pdfFile: {
         name: `${originalName}.pdf`,
-        path: pdfPath,
-        size: fs.statSync(pdfPath).size,
         downloadUrl: `${baseUrl}/api/download/pdf/${pdfFileName}`,
-        isConverted: isPdfConverted
+        size: fs.statSync(pdfPath).size
       },
+      // 圖片檔案資訊
       imageFiles: {
         count: imageFiles.length,
-        folder: imageFolderName,
         downloadUrl: `${baseUrl}/api/download/images/${imageFolderName}`,
         files: imageFiles.map((filePath, index) => ({
           name: path.basename(filePath),
@@ -254,14 +246,14 @@ async function processFileConversion(originalFile) {
   }
 }
 
-// ============= 發送通知功能（更新） =============
+// ============= N8N 通知功能 =============
 
 /**
- * 發送檔案處理完成通知到 N8N
+ * 發送轉換完成通知到 N8N，包含下載連結
  */
-async function sendNotificationToLineBot(userId, fileInfo, conversionResult) {
+async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
   try {
-    console.log('📨 準備發送轉換完成通知到 N8N');
+    console.log('📨 發送轉換結果到 N8N');
     
     const webhookUrl = process.env.N8N_WEBHOOK_URL;
     if (!webhookUrl) {
@@ -269,101 +261,53 @@ async function sendNotificationToLineBot(userId, fileInfo, conversionResult) {
       return false;
     }
 
-    // 構造包含轉換結果的通知訊息
-    const notificationText = `📎 檔案處理完成！\n` +
-      `📄 原檔：${fileInfo.fileName}\n` +
-      `📋 PDF：${conversionResult.pdfFile.name} (${(conversionResult.pdfFile.size / 1024 / 1024).toFixed(2)} MB)\n` +
-      `🖼️ 圖片：${conversionResult.imageFiles.count} 張\n` +
-      `⏰ 處理時間：${new Date(conversionResult.processTime).toLocaleString('zh-TW')}\n` +
-      `\n📥 下載連結：\n` +
-      `• PDF：${conversionResult.pdfFile.downloadUrl}\n` +
-      `• 圖片：${conversionResult.imageFiles.downloadUrl}`;
-
-    const messageData = {
-      type: 'message',
+    // 構造發送給 N8N 的資料
+    const n8nData = {
+      type: 'file_conversion_completed',
       timestamp: Date.now(),
-      source: {
-        type: 'user',
-        userId: userId || 'anonymous_user'
+      userId: userId || 'anonymous_user',
+      originalFile: {
+        name: fileInfo.fileName,
+        size: fileInfo.fileSize,
+        uploadTime: fileInfo.uploadTime
       },
-      message: {
-        id: `msg_${Date.now()}`,
-        type: 'text',
-        text: notificationText
-      },
-      replyToken: `reply_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      // 檔案轉換結果資料
-      conversionData: {
-        originalFile: fileInfo,
-        conversionResult: conversionResult,
-        completed: true
+      // PDF 下載連結
+      pdfDownloadUrl: conversionResult.pdfFile.downloadUrl,
+      // 圖片下載連結
+      imagesDownloadUrl: conversionResult.imageFiles.downloadUrl,
+      conversionDetails: {
+        pdfFileName: conversionResult.pdfFile.name,
+        pdfSize: conversionResult.pdfFile.size,
+        imageCount: conversionResult.imageFiles.count,
+        processTime: conversionResult.processTime,
+        // 個別圖片下載連結（如果需要的話）
+        individualImages: conversionResult.imageFiles.files.map(img => ({
+          page: img.page,
+          downloadUrl: img.downloadUrl
+        }))
       }
     };
 
-    console.log('🎯 發送轉換結果到 N8N Webhook');
+    console.log('🎯 發送到 N8N 的資料:', {
+      PDF: n8nData.pdfDownloadUrl,
+      圖片: n8nData.imagesDownloadUrl,
+      圖片數量: n8nData.conversionDetails.imageCount
+    });
 
-    const response = await axios.post(webhookUrl, messageData, {
+    const response = await axios.post(webhookUrl, n8nData, {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'File-Converter/1.0',
-        'X-Source': 'file-conversion-notification'
+        'X-Source': 'file-conversion-completed'
       },
       timeout: 15000
     });
 
-    console.log('✅ 成功觸發 N8N Webhook！轉換結果已發送');
+    console.log('✅ N8N Webhook 觸發成功！');
     return true;
 
   } catch (error) {
-    console.error('❌ 發送轉換通知到 N8N 失敗:', error.message);
-    return false;
-  }
-}
-
-/**
- * 發送 LINE 推播訊息（更新）
- */
-async function sendLineMessage(userId, conversionResult) {
-  try {
-    if (process.env.SEND_LINE_NOTIFICATION !== 'true') {
-      console.log('ℹ️ LINE 推播已停用');
-      return false;
-    }
-
-    const accessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-    if (!accessToken) {
-      console.warn('⚠️ LINE_CHANNEL_ACCESS_TOKEN 未設定');
-      return false;
-    }
-
-    const message = `🎉 檔案轉換完成！\n\n` +
-      `📄 PDF 檔案：${conversionResult.pdfFile.name}\n` +
-      `🖼️ 圖片：${conversionResult.imageFiles.count} 張\n\n` +
-      `📥 點擊下載：\n${conversionResult.pdfFile.downloadUrl}`;
-
-    const response = await axios.post(
-      'https://api.line.me/v2/bot/message/push',
-      {
-        to: userId,
-        messages: [{
-          type: 'text',
-          text: message
-        }]
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      }
-    );
-
-    console.log('✅ LINE 推播發送成功');
-    return true;
-
-  } catch (error) {
-    console.error('❌ LINE 推播發送失敗:', error.message);
+    console.error('❌ 發送到 N8N 失敗:', error.message);
     return false;
   }
 }
@@ -386,7 +330,6 @@ app.get('/api/health', (req, res) => {
       libreOffice: !!libreOfficeConvert,
       pdf2pic: !!pdf2pic
     },
-    lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定',
     n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定' : '未設定'
   });
 });
@@ -401,7 +344,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// 檔案上傳與轉換 API（主要更新）
+// 檔案上傳與轉換 API（簡化版）
 app.post('/api/upload', (req, res) => {
   console.log('📤 收到上傳請求');
   
@@ -440,35 +383,35 @@ app.post('/api/upload', (req, res) => {
         uploadTime: new Date().toISOString()
       };
 
-      const result = {
-        success: true,
-        message: '檔案上傳並轉換完成',
-        originalFile: fileInfo,
-        conversion: conversionResult
-      };
-
       const userId = req.body.userId;
       
-      // 發送完成通知到 N8N
-      console.log('🚀 發送轉換完成通知到 N8N...');
-      const n8nTriggered = await sendNotificationToLineBot(userId, fileInfo, conversionResult);
-      result.n8nTriggered = n8nTriggered;
+      // 發送轉換結果到 N8N
+      console.log('🚀 發送轉換結果到 N8N...');
+      const n8nSent = await sendConversionResultToN8N(userId, fileInfo, conversionResult);
 
-      // 選擇性發送 LINE 推播
-      if (userId && process.env.SEND_LINE_NOTIFICATION === 'true') {
-        console.log('📱 發送 LINE 推播給用戶:', userId);
-        const lineSent = await sendLineMessage(userId, conversionResult);
-        result.lineSent = lineSent;
-      } else {
-        result.lineSent = false;
+      // 清理原始上傳檔案（可選）
+      if (process.env.KEEP_ORIGINAL_FILES !== 'true') {
+        try {
+          fs.unlinkSync(req.file.path);
+          console.log('🗑️ 已清理原始上傳檔案');
+        } catch (cleanupError) {
+          console.warn('⚠️ 清理原始檔案失敗:', cleanupError.message);
+        }
       }
 
-      console.log('🏁 完整流程處理完成:', {
+      // 簡化的成功回應（只給前端簡單確認）
+      const result = {
+        success: true,
+        message: '檔案轉換完成',
+        fileName: req.file.originalname,
+        n8nNotified: n8nSent
+      };
+
+      console.log('🏁 轉換流程完成:', {
         檔案: fileInfo.fileName,
-        'PDF檔': conversionResult.pdfFile.name,
+        'PDF': conversionResult.pdfFile.name,
         '圖片數': conversionResult.imageFiles.count,
-        'N8N觸發': n8nTriggered ? '✅' : '❌',
-        'LINE推播': result.lineSent ? '✅' : '⏸️'
+        'N8N通知': n8nSent ? '✅' : '❌'
       });
 
       res.json(result);
@@ -493,13 +436,7 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// 下載路由（更新）
-app.get('/api/download/original/:filename', (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(uploadDir, filename);
-  downloadFile(res, filePath, '原始檔案');
-});
-
+// 下載路由
 app.get('/api/download/pdf/:filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(pdfDir, filename);
@@ -516,7 +453,7 @@ app.get('/api/download/images/:folder', async (req, res) => {
     }
 
     const files = fs.readdirSync(folderPath);
-    const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png'));
+    const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png') || f.toLowerCase().endsWith('.jpg'));
     
     res.json({
       folder: folderName,
@@ -565,12 +502,6 @@ function downloadFile(res, filePath, fileType) {
       case '.jpeg':
         contentType = 'image/jpeg';
         break;
-      case '.doc':
-        contentType = 'application/msword';
-        break;
-      case '.docx':
-        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        break;
     }
     
     const filename = path.basename(filePath);
@@ -588,41 +519,7 @@ function downloadFile(res, filePath, fileType) {
   }
 }
 
-// 測試轉換功能 API
-app.post('/api/test-conversion', async (req, res) => {
-  try {
-    console.log('🧪 測試檔案轉換功能');
-    
-    const testResult = {
-      modules: {
-        libreOffice: !!libreOfficeConvert,
-        pdf2pic: !!pdf2pic
-      },
-      directories: {
-        upload: fs.existsSync(uploadDir),
-        pdf: fs.existsSync(pdfDir),
-        images: fs.existsSync(imageDir)
-      },
-      ready: !!libreOfficeConvert && !!pdf2pic
-    };
-
-    res.json({
-      success: testResult.ready,
-      message: testResult.ready ? '檔案轉換功能正常' : '檔案轉換功能未就緒',
-      details: testResult
-    });
-    
-  } catch (error) {
-    console.error('❌ 測試轉換功能失敗:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
-
 // 靜態檔案服務
-app.use('/uploads', express.static(uploadDir));
 app.use('/pdfs', express.static(pdfDir));
 app.use('/images', express.static(imageDir));
 app.use(express.static(__dirname));
@@ -660,15 +557,14 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔧 轉換功能:`);
   console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌'}`);
   console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌'}`);
-  console.log(`📱 LINE Token: ${process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設定' : '未設定'}`);
   console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
   console.log('================================');
-  console.log('✨ 系統流程：');
+  console.log('✨ 簡化流程：');
   console.log('   📤 檔案上傳');
   console.log('   📄 轉換為 PDF');
   console.log('   🖼️ 轉換為圖片');
-  console.log('   🎯 觸發 N8N Webhook');
-  console.log('   📱 發送 LINE 通知（可選）');
+  console.log('   🎯 發送下載連結到 N8N');
+  console.log('   ✅ 回傳簡單確認給前端');
   console.log('================================');
 });
 
