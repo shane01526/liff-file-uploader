@@ -5,7 +5,7 @@ services:
     plan: free
     buildCommand: |
       apt-get update
-      apt-get install -y graphicsmagick ghostscript
+      apt-get install -y GraphicsMagick ghostscript
       npm install
     startCommand: node server.js
     envVars:
