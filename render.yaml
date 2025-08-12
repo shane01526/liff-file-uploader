@@ -2,8 +2,12 @@ services:
   - type: web
     name: your-app-name
     env: node
+    plan: free
     buildCommand: |
       apt-get update
       apt-get install -y imagemagick ghostscript
       npm install
     startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
