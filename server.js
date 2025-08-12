@@ -165,7 +165,7 @@ async function convertPDFToImages(pdfPath, outputDir) {
       format: process.env.IMAGE_OUTPUT_FORMAT || "png",
       width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
       height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600,
-      convert: "gm"
+      convert: "convert"
     });
 
     // 轉換所有頁面
