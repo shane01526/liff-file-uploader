@@ -5,6 +5,9 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { promisify } = require('util');
+process.env.PATH += ':/usr/local/bin';
+process.env.PATH = process.env.PATH + ":/usr/bin:/usr/local/bin";
+
 
 // 文件轉換相關模組
 let libreOfficeConvert;
