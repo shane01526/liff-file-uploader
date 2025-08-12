@@ -14,10 +14,9 @@
     "axios": "^1.6.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "pdf-poppler": "^0.2.1",
-    "libre-office-convert": "^1.6.0",
-    "sharp": "^0.33.0",
-    "pdf2pic": "^2.1.4"
+    "pdf2pic": "^2.1.4",
+    "libreoffice-convert": "^1.6.0",
+    "sharp": "^0.33.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
