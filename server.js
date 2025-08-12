@@ -13,11 +13,12 @@ let pdf2pic;
 // 動態載入轉換模組
 const loadConversionModules = () => {
   try {
-    libreOfficeConvert = require('libre-office-convert');
+    libreOfficeConvert = require('libreoffice-convert');
     libreOfficeConvert.convertAsync = promisify(libreOfficeConvert.convert);
     console.log('✅ LibreOffice 轉換模組載入成功');
   } catch (error) {
     console.warn('⚠️ LibreOffice 轉換模組載入失敗:', error.message);
+    console.warn('⚠️ 將跳過 DOC/DOCX 轉 PDF 功能');
   }
 
   try {
@@ -25,6 +26,7 @@ const loadConversionModules = () => {
     console.log('✅ PDF2Pic 轉換模組載入成功');
   } catch (error) {
     console.warn('⚠️ PDF2Pic 轉換模組載入失敗:', error.message);
+    console.warn('⚠️ 將跳過 PDF 轉圖片功能');
   }
 };
 
@@ -115,7 +117,7 @@ async function convertToPDF(inputPath, outputPath) {
     console.log('📄 開始轉換為 PDF:', path.basename(inputPath));
     
     if (!libreOfficeConvert) {
-      throw new Error('LibreOffice 轉換模組未載入');
+      throw new Error('LibreOffice 轉換模組未載入，無法轉換 DOC/DOCX 檔案');
     }
 
     // 讀取原始檔案
@@ -144,7 +146,7 @@ async function convertPDFToImages(pdfPath, outputDir) {
     console.log('🖼️ 開始將 PDF 轉換為圖片:', path.basename(pdfPath));
     
     if (!pdf2pic) {
-      throw new Error('PDF2Pic 轉換模組未載入');
+      throw new Error('PDF2Pic 轉換模組未載入，無法轉換 PDF 為圖片');
     }
 
     // 確保輸出目錄存在
@@ -200,12 +202,26 @@ async function processFileConversion(originalFile) {
       console.log('📄 檔案已是 PDF 格式，複製到 PDF 目錄');
     } else {
       // DOC/DOCX 轉 PDF
+      if (!libreOfficeConvert) {
+        throw new Error('系統不支援 DOC/DOCX 轉換功能，請直接上傳 PDF 檔案');
+      }
       await convertToPDF(originalFile.path, pdfPath);
     }
 
     // 步驟 2: PDF 轉圖片
     const imageOutputDir = path.join(imageDir, `${timestamp}-${originalName}`);
-    const imageFiles = await convertPDFToImages(pdfPath, imageOutputDir);
+    let imageFiles = [];
+    
+    if (pdf2pic) {
+      try {
+        imageFiles = await convertPDFToImages(pdfPath, imageOutputDir);
+      } catch (imageError) {
+        console.warn('⚠️ 圖片轉換失敗，但 PDF 轉換成功:', imageError.message);
+        // 如果圖片轉換失敗，至少還有 PDF
+      }
+    } else {
+      console.warn('⚠️ PDF2Pic 模組未載入，跳過圖片轉換');
+    }
 
     // 建立下載 URL
     const baseUrl = process.env.FRONTEND_URL || `http://localhost:${PORT}`;
@@ -222,7 +238,7 @@ async function processFileConversion(originalFile) {
       // 圖片檔案資訊
       imageFiles: {
         count: imageFiles.length,
-        downloadUrl: `${baseUrl}/api/download/images/${imageFolderName}`,
+        downloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}` : null,
         files: imageFiles.map((filePath, index) => ({
           name: path.basename(filePath),
           page: index + 1,
@@ -273,7 +289,7 @@ async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
       },
       // PDF 下載連結
       pdfDownloadUrl: conversionResult.pdfFile.downloadUrl,
-      // 圖片下載連結
+      // 圖片下載連結 (如果有的話)
       imagesDownloadUrl: conversionResult.imageFiles.downloadUrl,
       conversionDetails: {
         pdfFileName: conversionResult.pdfFile.name,
@@ -290,7 +306,7 @@ async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
 
     console.log('🎯 發送到 N8N 的資料:', {
       PDF: n8nData.pdfDownloadUrl,
-      圖片: n8nData.imagesDownloadUrl,
+      圖片: n8nData.imagesDownloadUrl || '無',
       圖片數量: n8nData.conversionDetails.imageCount
     });
 
@@ -330,6 +346,11 @@ app.get('/api/health', (req, res) => {
       libreOffice: !!libreOfficeConvert,
       pdf2pic: !!pdf2pic
     },
+    features: {
+      pdfUpload: true,
+      docConversion: !!libreOfficeConvert,
+      imageConversion: !!pdf2pic
+    },
     n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定' : '未設定'
   });
 });
@@ -344,7 +365,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// 檔案上傳與轉換 API（簡化版）
+// 檔案上傳與轉換 API（加強錯誤處理）
 app.post('/api/upload', (req, res) => {
   console.log('📤 收到上傳請求');
   
@@ -362,6 +383,16 @@ app.post('/api/upload', (req, res) => {
         return res.status(400).json({ 
           success: false, 
           error: '沒有收到檔案' 
+        });
+      }
+
+      const originalExt = path.extname(req.file.originalname).toLowerCase();
+      
+      // 檢查是否支援該檔案格式
+      if (originalExt !== '.pdf' && !libreOfficeConvert) {
+        return res.status(400).json({
+          success: false,
+          error: '系統目前不支援 DOC/DOCX 轉換，請直接上傳 PDF 檔案'
         });
       }
 
@@ -404,7 +435,11 @@ app.post('/api/upload', (req, res) => {
         success: true,
         message: '檔案轉換完成',
         fileName: req.file.originalname,
-        n8nNotified: n8nSent
+        n8nNotified: n8nSent,
+        conversions: {
+          pdfGenerated: true,
+          imagesGenerated: conversionResult.imageFiles.count > 0
+        }
       };
 
       console.log('🏁 轉換流程完成:', {
@@ -555,14 +590,25 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`   📄 PDF: ${pdfDir}`);
   console.log(`   🖼️ 圖片: ${imageDir}`);
   console.log(`🔧 轉換功能:`);
-  console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌'}`);
-  console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌'}`);
+  console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
+  console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
   console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
   console.log('================================');
-  console.log('✨ 簡化流程：');
+  
+  if (!libreOfficeConvert) {
+    console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
+    console.log('   使用者只能上傳 PDF 檔案');
+  }
+  
+  if (!pdf2pic) {
+    console.log('⚠️ 注意：PDF 轉圖片功能不可用');
+    console.log('   只會提供 PDF 下載連結');
+  }
+  
+  console.log('✨ 系統流程：');
   console.log('   📤 檔案上傳');
-  console.log('   📄 轉換為 PDF');
-  console.log('   🖼️ 轉換為圖片');
+  console.log('   📄 轉換為 PDF (如果需要)');
+  console.log('   🖼️ 轉換為圖片 (如果可用)');
   console.log('   🎯 發送下載連結到 N8N');
   console.log('   ✅ 回傳簡單確認給前端');
   console.log('================================');
