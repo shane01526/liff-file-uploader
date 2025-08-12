@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: your-app-name
+    env: node
+    buildCommand: |
+      apt-get update
+      apt-get install -y imagemagick ghostscript
+      npm install
+    startCommand: npm start
