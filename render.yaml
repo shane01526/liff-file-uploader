@@ -6,4 +6,4 @@ services:
       apt-get update
       apt-get install -y imagemagick ghostscript
       npm install
-    startCommand: npm start
+    startCommand: node server.js
