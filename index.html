@@ -1,358 +1,5 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>履歷上傳</title>
-    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #f5f3f0 0%, #ede7e0 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-
-        .container {
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(10px);
-            border-radius: 24px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-            width: 100%;
-            max-width: 480px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .header {
-            text-align: center;
-            margin-bottom: 32px;
-        }
-
-        .header h1 {
-            color: #8b7e74;
-            font-size: 28px;
-            font-weight: 300;
-            margin-bottom: 8px;
-            letter-spacing: -0.5px;
-        }
-
-        .header p {
-            color: #a89b91;
-            font-size: 16px;
-            font-weight: 300;
-        }
-
-        .upload-area {
-            border: 2px dashed #c4b5a0;
-            border-radius: 16px;
-            padding: 48px 24px;
-            text-align: center;
-            background: linear-gradient(145deg, #faf9f7, #f0ebe4);
-            transition: all 0.3s ease;
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .upload-area::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(196, 181, 160, 0.1), transparent);
-            transition: left 0.5s ease;
-        }
-
-        .upload-area:hover {
-            border-color: #b5a394;
-            background: linear-gradient(145deg, #f7f5f2, #ede7e0);
-        }
-
-        .upload-area:hover::before {
-            left: 100%;
-        }
-
-        .upload-area.dragover {
-            border-color: #9d8b7a;
-            background: linear-gradient(145deg, #f2eee8, #e8ddd5);
-            transform: scale(1.02);
-        }
-
-        .upload-icon {
-            width: 64px;
-            height: 64px;
-            margin: 0 auto 20px;
-            background: #d4c4b0;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-        }
-
-        .upload-area:hover .upload-icon {
-            background: #c4b5a0;
-            transform: translateY(-2px);
-        }
-
-        .upload-icon svg {
-            width: 28px;
-            height: 28px;
-            color: white;
-        }
-
-        .upload-text h3 {
-            color: #8b7e74;
-            font-size: 20px;
-            font-weight: 400;
-            margin-bottom: 8px;
-        }
-
-        .upload-text p {
-            color: #a89b91;
-            font-size: 14px;
-            margin-bottom: 16px;
-            line-height: 1.5;
-        }
-
-        .file-types {
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 16px;
-        }
-
-        .file-type {
-            background: rgba(212, 196, 176, 0.3);
-            color: #8b7e74;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        .file-input {
-            display: none;
-        }
-
-        .file-info {
-            margin-top: 24px;
-            padding: 20px;
-            background: rgba(212, 196, 176, 0.1);
-            border-radius: 12px;
-            border-left: 4px solid #d4c4b0;
-            display: none;
-        }
-
-        .file-info.show {
-            display: block;
-            animation: fadeInUp 0.3s ease;
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .file-details {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 12px;
-        }
-
-        .file-name {
-            color: #8b7e74;
-            font-weight: 500;
-            flex: 1;
-            margin-right: 12px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-size {
-            color: #a89b91;
-            font-size: 14px;
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: rgba(212, 196, 176, 0.3);
-            border-radius: 3px;
-            overflow: hidden;
-            margin-bottom: 12px;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #d4c4b0, #c4b5a0);
-            border-radius: 3px;
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-
-        .status {
-            color: #a89b91;
-            font-size: 14px;
-            text-align: center;
-        }
-
-        .buttons {
-            margin-top: 24px;
-            display: flex;
-            gap: 12px;
-        }
-
-        .btn {
-            flex: 1;
-            padding: 14px 24px;
-            border: none;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-transform: none;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #d4c4b0, #c4b5a0);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #c4b5a0, #b5a394);
-            transform: translateY(-1px);
-            box-shadow: 0 8px 25px rgba(196, 181, 160, 0.3);
-        }
-
-        .btn-secondary {
-            background: rgba(212, 196, 176, 0.2);
-            color: #8b7e74;
-            border: 1px solid rgba(212, 196, 176, 0.5);
-        }
-
-        .btn-secondary:hover {
-            background: rgba(212, 196, 176, 0.3);
-        }
-
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-        }
-
-        .error-message {
-            background: rgba(231, 123, 123, 0.1);
-            color: #c53030;
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-top: 16px;
-            font-size: 14px;
-            border-left: 4px solid #fc8181;
-            display: none;
-        }
-
-        .success-message {
-            background: rgba(72, 187, 120, 0.1);
-            color: #2f855a;
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-top: 16px;
-            font-size: 14px;
-            border-left: 4px solid #68d391;
-            display: none;
-        }
-
-        @media (max-width: 768px) {
-            .container {
-                padding: 24px;
-                margin: 16px;
-            }
-
-            .header h1 {
-                font-size: 24px;
-            }
-
-            .upload-area {
-                padding: 32px 16px;
-            }
-
-            .buttons {
-                flex-direction: column;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>履歷上傳</h1>
-            <p>請上傳您的履歷檔案，我們將為您快速處理</p>
-        </div>
-
-        <div class="upload-area" id="uploadArea">
-            <div class="upload-icon">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M7 10V9C7 6.23858 9.23858 4 12 4C14.7614 4 17 6.23858 17 9V10C18.1046 10 19 10.8954 19 12V18C19 19.1046 18.1046 20 17 20H7C5.89543 20 5 19.1046 5 18V12C5 10.8954 5.89543 10 7 10Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M12 14L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </div>
-            <div class="upload-text">
-                <h3>拖曳檔案至此處</h3>
-                <p>或點擊選擇檔案上傳</p>
-                <div class="file-types">
-                    <span class="file-type">PDF</span>
-                    <span class="file-type">DOC</span>
-                    <span class="file-type">DOCX</span>
-                </div>
-            </div>
-            <input type="file" id="fileInput" class="file-input" accept=".pdf,.doc,.docx" />
-        </div>
-
-        <div class="file-info" id="fileInfo">
-            <div class="file-details">
-                <span class="file-name" id="fileName">履歷.pdf</span>
-                <span class="file-size" id="fileSize">2.5 MB</span>
-            </div>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <div class="status" id="status">準備上傳...</div>
-        </div>
-
-        <div class="buttons">
-            <button class="btn btn-secondary" id="cancelBtn" style="display: none;">取消</button>
-            <button class="btn btn-primary" id="uploadBtn" disabled>選擇檔案</button>
-        </div>
-
-        <div class="error-message" id="errorMessage"></div>
-        <div class="success-message" id="successMessage"></div>
-    </div>
-
-    <script>
-        // 修復版前端代碼 - 加強錯誤處理和 LINE 整合
-console.log('🚀 載入增強版前端代碼');
+// 簡化版前端代碼 - 不顯示下載連結給使用者
+console.log('🚀 載入簡化版前端代碼');
 
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
@@ -489,7 +136,7 @@ cancelBtn.addEventListener('click', () => {
     successMessage.style.display = 'none';
 });
 
-// 增強的上傳函數
+// 簡化的上傳函數
 async function uploadFile() {
     if (!selectedFile) {
         showError('沒有選擇檔案');
@@ -500,16 +147,16 @@ async function uploadFile() {
     console.log('👤 用戶 ID:', liffUserId);
     
     uploadBtn.disabled = true;
-    uploadBtn.textContent = '上傳中...';
-    status.textContent = '正在上傳檔案...';
+    uploadBtn.textContent = '處理中...';
+    status.textContent = '正在上傳並轉換檔案...';
     
     // 進度動畫
     let progress = 0;
     const progressInterval = setInterval(() => {
-        progress += Math.random() * 10 + 5;
+        progress += Math.random() * 8 + 3; // 稍微慢一點，因為要轉換
         if (progress > 90) progress = 90;
         progressFill.style.width = progress + '%';
-    }, 300);
+    }, 500);
     
     try {
         // 準備表單資料
@@ -523,9 +170,9 @@ async function uploadFile() {
         
         console.log('🌐 發送請求到 /api/upload');
         
-        // 建立帶有超時的請求
+        // 建立帶有超時的請求（增加時間因為要轉換檔案）
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超時
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超時
         
         // 發送請求
         const response = await fetch('/api/upload', {
@@ -576,34 +223,34 @@ async function uploadFile() {
             throw new Error('服務器回應格式錯誤');
         }
         
-        // 檢查上傳結果
+        // 檢查處理結果
         if (result.success) {
-            console.log('🎉 上傳成功!');
-            status.textContent = '上傳完成！';
-            uploadBtn.textContent = '上傳成功';
+            console.log('🎉 檔案處理成功!');
+            status.textContent = '轉換完成！';
+            uploadBtn.textContent = '處理完成';
             uploadBtn.style.background = 'linear-gradient(135deg, #93c5a1, #7fb78a)';
             
-            let successMsg = `檔案 "${result.fileName}" 上傳成功！`;
-            if (result.lineSent) {
-                successMsg += '\n✅ 已發送 LINE 通知';
-            }
-            if (result.fileUrl) {
-                console.log('🔗 檔案連結:', result.fileUrl);
+            let successMsg = `檔案 "${result.fileName}" 處理完成！`;
+            
+            if (result.n8nNotified) {
+                successMsg += '\n✅ 已發送處理結果';
+            } else {
+                successMsg += '\n⚠️ 處理完成但通知發送失敗';
             }
             
             showSuccess(successMsg);
             
-            // 5秒後重置
+            // 5秒後重置介面
             setTimeout(() => {
-                cancelBtn.click();
+                resetInterface();
             }, 5000);
             
         } else {
-            throw new Error(result.error || '上傳失敗，請重試');
+            throw new Error(result.error || '檔案處理失敗，請重試');
         }
         
     } catch (error) {
-        console.error('❌ 上傳錯誤:', error);
+        console.error('❌ 處理錯誤:', error);
         
         clearInterval(progressInterval);
         progressFill.style.width = '0%';
@@ -611,15 +258,28 @@ async function uploadFile() {
         uploadBtn.disabled = false;
         uploadBtn.textContent = '重試上傳';
         uploadBtn.style.background = '';
-        status.textContent = '上傳失敗';
+        status.textContent = '處理失敗';
         
         let errorMsg = error.message;
         if (error.name === 'AbortError') {
-            errorMsg = '上傳超時，請檢查網路連線後重試';
+            errorMsg = '處理超時，請檢查網路連線後重試';
         }
         
         showError(errorMsg);
     }
+}
+
+// 重置介面
+function resetInterface() {
+    selectedFile = null;
+    fileInfo.classList.remove('show');
+    uploadBtn.textContent = '選擇檔案';
+    uploadBtn.disabled = true;
+    uploadBtn.style.background = '';
+    cancelBtn.style.display = 'none';
+    fileInput.value = '';
+    errorMessage.style.display = 'none';
+    successMessage.style.display = 'none';
 }
 
 // 格式化檔案大小
@@ -641,6 +301,12 @@ async function testConnection() {
         if (healthResponse.ok) {
             const healthData = await healthResponse.json();
             console.log('❤️ 健康檢查通過:', healthData);
+            
+            // 檢查轉換模組狀態
+            if (!healthData.modules.libreOffice || !healthData.modules.pdf2pic) {
+                showError('文件轉換功能未就緒，請聯繫系統管理員');
+                return;
+            }
         } else {
             throw new Error(`健康檢查失敗: ${healthResponse.status}`);
         }
@@ -653,7 +319,12 @@ async function testConnection() {
         }
         
         console.log('✅ 服務器連接正常');
-        showSuccess('服務器連接正常，可以開始上傳檔案');
+        showSuccess('系統已就緒，可以開始上傳檔案');
+        
+        // 3秒後隱藏成功訊息
+        setTimeout(() => {
+            successMessage.style.display = 'none';
+        }, 3000);
         
     } catch (error) {
         console.error('❌ 服務器連接測試失敗:', error);
@@ -676,7 +347,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(testConnection, 1000);
 });
 
-console.log('✅ 增強版前端代碼載入完成');
-    </script>
-</body>
-</html>
+console.log('✅ 簡化版前端代碼載入完成');
