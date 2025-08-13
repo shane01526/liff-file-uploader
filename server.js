@@ -5,16 +5,47 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { promisify } = require('util');
-process.env.PATH += ':/usr/local/bin';
-process.env.PATH = process.env.PATH + ":/usr/bin:/usr/local/bin";
+const { exec } = require('child_process');
 
+// 設定環境變數和路徑
+process.env.PATH += ':/usr/local/bin:/usr/bin:/bin';
+process.env.PATH = process.env.PATH + ":/usr/bin:/usr/local/bin";
 
 // 文件轉換相關模組
 let libreOfficeConvert;
 let pdf2pic;
 
+// 檢查系統工具是否可用
+const checkSystemTools = async () => {
+  const tools = ['gm', 'convert', 'identify', 'gs', 'libreoffice'];
+  const results = {};
+  
+  for (const tool of tools) {
+    try {
+      await new Promise((resolve, reject) => {
+        exec(`which ${tool}`, (error, stdout) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(stdout.trim());
+          }
+        });
+      });
+      results[tool] = '✅ 可用';
+    } catch (error) {
+      results[tool] = '❌ 不可用';
+    }
+  }
+  
+  console.log('🔍 系統工具檢查:', results);
+  return results;
+};
+
 // 動態載入轉換模組
-const loadConversionModules = () => {
+const loadConversionModules = async () => {
+  // 先檢查系統工具
+  const systemTools = await checkSystemTools();
+  
   try {
     libreOfficeConvert = require('libreoffice-convert');
     libreOfficeConvert.convertAsync = promisify(libreOfficeConvert.convert);
@@ -25,8 +56,17 @@ const loadConversionModules = () => {
   }
 
   try {
+    // 檢查必要的二進位檔案
+    if (systemTools.gm === '❌ 不可用' && systemTools.convert === '❌ 不可用') {
+      throw new Error('GraphicsMagick 和 ImageMagick 都不可用');
+    }
+    
     pdf2pic = require('pdf2pic');
     console.log('✅ PDF2Pic 轉換模組載入成功');
+    
+    // 測試 PDF 轉換功能
+    console.log('🧪 測試 PDF 轉換工具...');
+    
   } catch (error) {
     console.warn('⚠️ PDF2Pic 轉換模組載入失敗:', error.message);
     console.warn('⚠️ 將跳過 PDF 轉圖片功能');
@@ -44,9 +84,6 @@ const PORT = process.env.PORT || 10000;
 console.log('🚀 啟動伺服器...');
 console.log('📍 Port:', PORT);
 console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
-
-// 載入轉換模組
-loadConversionModules();
 
 // 基本中介軟體
 app.use(cors({
@@ -142,7 +179,7 @@ async function convertToPDF(inputPath, outputPath) {
 }
 
 /**
- * 將 PDF 轉換為圖片
+ * 使用更強健的方式將 PDF 轉換為圖片
  */
 async function convertPDFToImages(pdfPath, outputDir) {
   try {
@@ -158,21 +195,54 @@ async function convertPDFToImages(pdfPath, outputDir) {
     }
 
     const baseName = path.basename(pdfPath, '.pdf');
-    const convert = pdf2pic.fromPath(pdfPath, {
-      density: parseInt(process.env.PDF_CONVERT_DENSITY) || 200,
-      saveFilename: baseName,
-      savePath: outputDir,
-      format: process.env.IMAGE_OUTPUT_FORMAT || "png",
-      width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
-      height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600,
-      convert: "convert"
-    });
-
-    // 轉換所有頁面
-    const results = await convert.bulk(-1, { responseType: "image" });
     
+    // 嘗試不同的轉換配置
+    const configs = [
+      // 配置 1: 使用 convert (ImageMagick)
+      {
+        density: parseInt(process.env.PDF_CONVERT_DENSITY) || 200,
+        saveFilename: baseName,
+        savePath: outputDir,
+        format: process.env.IMAGE_OUTPUT_FORMAT || "png",
+        width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
+        height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600,
+        // 明確指定使用 convert
+        convert: "convert"
+      },
+      // 配置 2: 使用 gm (GraphicsMagick)
+      {
+        density: parseInt(process.env.PDF_CONVERT_DENSITY) || 150,
+        saveFilename: baseName,
+        savePath: outputDir,
+        format: "png",
+        width: 1000,
+        height: 1400,
+        convert: "gm"
+      }
+    ];
+
+    let results = null;
+    let lastError = null;
+
+    for (let i = 0; i < configs.length; i++) {
+      try {
+        console.log(`🔄 嘗試轉換配置 ${i + 1}...`);
+        const convert = pdf2pic.fromPath(pdfPath, configs[i]);
+        results = await convert.bulk(-1, { responseType: "image" });
+        
+        if (results && results.length > 0) {
+          console.log(`✅ 配置 ${i + 1} 轉換成功!`);
+          break;
+        }
+      } catch (error) {
+        console.warn(`⚠️ 配置 ${i + 1} 轉換失敗:`, error.message);
+        lastError = error;
+        continue;
+      }
+    }
+
     if (!results || results.length === 0) {
-      throw new Error('PDF 轉換圖片失敗：沒有產生圖片檔案');
+      throw lastError || new Error('所有轉換配置都失敗了');
     }
 
     const imageFiles = results.map(result => result.path);
@@ -182,8 +252,60 @@ async function convertPDFToImages(pdfPath, outputDir) {
     
   } catch (error) {
     console.error('❌ 圖片轉換失敗:', error);
-    throw error;
+    
+    // 作為備選方案，嘗試使用系統命令直接轉換
+    try {
+      console.log('🔄 嘗試使用系統命令轉換...');
+      const fallbackResult = await convertPDFUsingSystemCommand(pdfPath, outputDir);
+      return fallbackResult;
+    } catch (fallbackError) {
+      console.error('❌ 系統命令轉換也失敗:', fallbackError);
+      throw error; // 拋出原始錯誤
+    }
   }
+}
+
+/**
+ * 使用系統命令直接轉換 PDF 為圖片（備選方案）
+ */
+async function convertPDFUsingSystemCommand(pdfPath, outputDir) {
+  return new Promise((resolve, reject) => {
+    const baseName = path.basename(pdfPath, '.pdf');
+    const outputPattern = path.join(outputDir, `${baseName}-%d.png`);
+    
+    // 嘗試使用 convert 命令
+    const convertCmd = `convert -density 200 -quality 85 "${pdfPath}" "${outputPattern}"`;
+    
+    console.log('🔧 執行系統命令:', convertCmd);
+    
+    exec(convertCmd, (error, stdout, stderr) => {
+      if (error) {
+        console.error('❌ 系統命令執行失敗:', error);
+        reject(error);
+        return;
+      }
+      
+      try {
+        // 檢查生成的檔案
+        const files = fs.readdirSync(outputDir);
+        const imageFiles = files
+          .filter(f => f.startsWith(baseName) && f.endsWith('.png'))
+          .map(f => path.join(outputDir, f))
+          .sort();
+        
+        if (imageFiles.length === 0) {
+          reject(new Error('系統命令沒有生成任何圖片檔案'));
+          return;
+        }
+        
+        console.log('✅ 系統命令轉換成功:', imageFiles.length, '張圖片');
+        resolve(imageFiles);
+        
+      } catch (fsError) {
+        reject(fsError);
+      }
+    });
+  });
 }
 
 /**
@@ -335,8 +457,12 @@ async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
 // ===== API 路由 =====
 
 // 健康檢查
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   console.log('❤️ 健康檢查');
+  
+  // 檢查系統工具
+  const systemTools = await checkSystemTools();
+  
   res.json({ 
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -350,6 +476,7 @@ app.get('/api/health', (req, res) => {
       libreOffice: !!libreOfficeConvert,
       pdf2pic: !!pdf2pic
     },
+    systemTools: systemTools,
     features: {
       pdfUpload: true,
       docConversion: !!libreOfficeConvert,
@@ -585,44 +712,56 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: '伺服器錯誤' });
 });
 
-// 啟動伺服器
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('🎉 文件轉換伺服器啟動成功！');
-  console.log(`🌐 Server URL: http://localhost:${PORT}`);
-  console.log(`📁 資料夾:`);
-  console.log(`   📤 上傳: ${uploadDir}`);
-  console.log(`   📄 PDF: ${pdfDir}`);
-  console.log(`   🖼️ 圖片: ${imageDir}`);
-  console.log(`🔧 轉換功能:`);
-  console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
-  console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
-  console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
-  console.log('================================');
+// 伺服器初始化
+const initializeServer = async () => {
+  // 載入轉換模組
+  await loadConversionModules();
   
-  if (!libreOfficeConvert) {
-    console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
-    console.log('   使用者只能上傳 PDF 檔案');
-  }
-  
-  if (!pdf2pic) {
-    console.log('⚠️ 注意：PDF 轉圖片功能不可用');
-    console.log('   只會提供 PDF 下載連結');
-  }
-  
-  console.log('✨ 系統流程：');
-  console.log('   📤 檔案上傳');
-  console.log('   📄 轉換為 PDF (如果需要)');
-  console.log('   🖼️ 轉換為圖片 (如果可用)');
-  console.log('   🎯 發送下載連結到 N8N');
-  console.log('   ✅ 回傳簡單確認給前端');
-  console.log('================================');
-});
-
-// 優雅關閉
-process.on('SIGTERM', () => {
-  console.log('📴 收到 SIGTERM，正在關閉伺服器...');
-  server.close(() => {
-    console.log('✅ 伺服器已關閉');
-    process.exit(0);
+  // 啟動伺服器
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log('🎉 文件轉換伺服器啟動成功！');
+    console.log(`🌐 Server URL: http://localhost:${PORT}`);
+    console.log(`📁 資料夾:`);
+    console.log(`   📤 上傳: ${uploadDir}`);
+    console.log(`   📄 PDF: ${pdfDir}`);
+    console.log(`   🖼️ 圖片: ${imageDir}`);
+    console.log(`🔧 轉換功能:`);
+    console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
+    console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
+    console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
+    console.log('================================');
+    
+    if (!libreOfficeConvert) {
+      console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
+      console.log('   使用者只能上傳 PDF 檔案');
+    }
+    
+    if (!pdf2pic) {
+      console.log('⚠️ 注意：PDF 轉圖片功能不可用');
+      console.log('   只會提供 PDF 下載連結');
+    }
+    
+    console.log('✨ 系統流程：');
+    console.log('   📤 檔案上傳');
+    console.log('   📄 轉換為 PDF (如果需要)');
+    console.log('   🖼️ 轉換為圖片 (如果可用)');
+    console.log('   🎯 發送下載連結到 N8N');
+    console.log('   ✅ 回傳簡單確認給前端');
+    console.log('================================');
   });
+
+  // 優雅關閉
+  process.on('SIGTERM', () => {
+    console.log('📴 收到 SIGTERM，正在關閉伺服器...');
+    server.close(() => {
+      console.log('✅ 伺服器已關閉');
+      process.exit(0);
+    });
+  });
+};
+
+// 啟動應用程式
+initializeServer().catch(error => {
+  console.error('❌ 伺服器初始化失敗:', error);
+  process.exit(1);
 });
