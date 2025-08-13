@@ -198,21 +198,20 @@ async function convertPDFToImages(pdfPath, outputDir) {
     
     // 嘗試不同的轉換配置
     const configs = [
-      // 配置 1: 使用 convert (ImageMagick)
+      // 配置 1: 使用 convert (ImageMagick) - 修正檔名格式
       {
         density: parseInt(process.env.PDF_CONVERT_DENSITY) || 200,
-        saveFilename: baseName,
+        saveFilename: `${baseName}.%d`, // 使用 %d 格式，從 1 開始
         savePath: outputDir,
         format: process.env.IMAGE_OUTPUT_FORMAT || "png",
         width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
         height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600,
-        // 明確指定使用 convert
         convert: "convert"
       },
       // 配置 2: 使用 gm (GraphicsMagick)
       {
         density: parseInt(process.env.PDF_CONVERT_DENSITY) || 150,
-        saveFilename: baseName,
+        saveFilename: `${baseName}.%d`,
         savePath: outputDir,
         format: "png",
         width: 1000,
@@ -232,6 +231,7 @@ async function convertPDFToImages(pdfPath, outputDir) {
         
         if (results && results.length > 0) {
           console.log(`✅ 配置 ${i + 1} 轉換成功!`);
+          console.log('生成的檔案:', results.map(r => path.basename(r.path)));
           break;
         }
       } catch (error) {
@@ -245,9 +245,22 @@ async function convertPDFToImages(pdfPath, outputDir) {
       throw lastError || new Error('所有轉換配置都失敗了');
     }
 
-    const imageFiles = results.map(result => result.path);
+    // 驗證生成的檔案是否實際存在
+    const imageFiles = [];
+    for (const result of results) {
+      if (fs.existsSync(result.path)) {
+        imageFiles.push(result.path);
+        console.log('✅ 確認檔案存在:', path.basename(result.path));
+      } else {
+        console.warn('⚠️ 檔案不存在:', result.path);
+      }
+    }
+
+    if (imageFiles.length === 0) {
+      throw new Error('轉換完成但沒有生成有效的圖片檔案');
+    }
+
     console.log('✅ 圖片轉換完成:', imageFiles.length, '張圖片');
-    
     return imageFiles;
     
   } catch (error) {
@@ -288,20 +301,48 @@ async function convertPDFUsingSystemCommand(pdfPath, outputDir) {
       try {
         // 檢查生成的檔案
         const files = fs.readdirSync(outputDir);
-        const imageFiles = files
-          .filter(f => f.startsWith(baseName) && f.endsWith('.png'))
+        console.log('📁 輸出目錄中的檔案:', files);
+        
+        let imageFiles = files
+          .filter(f => f.startsWith(baseName) && (f.endsWith('.png') || f.endsWith('.jpg')))
           .map(f => path.join(outputDir, f))
           .sort();
         
+        // 如果沒有找到預期格式的檔案，嘗試其他可能的格式
         if (imageFiles.length === 0) {
-          reject(new Error('系統命令沒有生成任何圖片檔案'));
+          console.log('🔍 尋找其他格式的圖片檔案...');
+          imageFiles = files
+            .filter(f => f.endsWith('.png') || f.endsWith('.jpg'))
+            .map(f => path.join(outputDir, f))
+            .sort();
+        }
+        
+        // 驗證檔案是否真實存在且大小合理
+        const validImageFiles = [];
+        for (const filePath of imageFiles) {
+          try {
+            const stats = fs.statSync(filePath);
+            if (stats.size > 100) { // 至少 100 bytes
+              validImageFiles.push(filePath);
+              console.log('✅ 有效圖片檔案:', path.basename(filePath), `(${(stats.size/1024).toFixed(1)}KB)`);
+            } else {
+              console.warn('⚠️ 檔案太小，可能損壞:', path.basename(filePath));
+            }
+          } catch (statError) {
+            console.warn('⚠️ 無法讀取檔案狀態:', path.basename(filePath));
+          }
+        }
+        
+        if (validImageFiles.length === 0) {
+          reject(new Error('系統命令沒有生成任何有效的圖片檔案'));
           return;
         }
         
-        console.log('✅ 系統命令轉換成功:', imageFiles.length, '張圖片');
-        resolve(imageFiles);
+        console.log('✅ 系統命令轉換成功:', validImageFiles.length, '張圖片');
+        resolve(validImageFiles);
         
       } catch (fsError) {
+        console.error('❌ 檔案系統錯誤:', fsError);
         reject(fsError);
       }
     });
@@ -746,7 +787,109 @@ app.get('/api/download/images/:folder/:filename', (req, res) => {
   const folderName = req.params.folder;
   const filename = req.params.filename;
   const filePath = path.join(imageDir, folderName, filename);
+  
+  console.log('🖼️ 圖片下載請求詳情:');
+  console.log('  資料夾:', folderName);
+  console.log('  檔案名:', filename);
+  console.log('  完整路徑:', filePath);
+  console.log('  檔案存在:', fs.existsSync(filePath));
+  
+  // 如果檔案不存在，嘗試列出資料夾內容來調試
+  if (!fs.existsSync(filePath)) {
+    const folderPath = path.join(imageDir, folderName);
+    console.log('❌ 檔案不存在，檢查資料夾內容:');
+    console.log('  資料夾路徑:', folderPath);
+    console.log('  資料夾存在:', fs.existsSync(folderPath));
+    
+    if (fs.existsSync(folderPath)) {
+      try {
+        const files = fs.readdirSync(folderPath);
+        console.log('  資料夾內容:', files);
+        
+        // 尋找相似的檔案名
+        const similarFiles = files.filter(f => 
+          f.includes(path.parse(filename).name.split('-')[0]) || 
+          f.includes(path.parse(filename).name)
+        );
+        console.log('  相似檔案:', similarFiles);
+        
+        // 如果找到完全匹配的檔案，重新導向
+        if (files.includes(filename)) {
+          console.log('✅ 找到檔案，重新嘗試下載');
+          return downloadFile(res, filePath, '圖片檔案');
+        }
+        
+        // 如果找到相似檔案，建議正確的檔名
+        if (similarFiles.length > 0) {
+          console.log('💡 建議使用:', similarFiles[0]);
+          return res.status(404).json({ 
+            error: '檔案不存在',
+            suggestion: similarFiles[0],
+            correctUrl: `/api/download/images/${folderName}/${similarFiles[0]}`,
+            availableFiles: files
+          });
+        }
+        
+      } catch (readError) {
+        console.error('❌ 讀取資料夾失敗:', readError);
+      }
+    }
+    
+    return res.status(404).json({ 
+      error: '圖片檔案不存在',
+      folderName: folderName,
+      fileName: filename,
+      fullPath: filePath
+    });
+  }
+  
   downloadFile(res, filePath, '圖片檔案');
+});
+
+// 新增：調試用的資料夾檢查 API
+app.get('/api/debug/images/:folder', (req, res) => {
+  try {
+    const folderName = req.params.folder;
+    const folderPath = path.join(imageDir, folderName);
+    
+    console.log('🔍 調試資料夾:', folderPath);
+    
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({
+        error: '資料夾不存在',
+        folderPath: folderPath,
+        imageDir: imageDir
+      });
+    }
+    
+    const files = fs.readdirSync(folderPath);
+    const fileDetails = files.map(fileName => {
+      const filePath = path.join(folderPath, fileName);
+      const stats = fs.statSync(filePath);
+      return {
+        name: fileName,
+        size: stats.size,
+        isFile: stats.isFile(),
+        extension: path.extname(fileName),
+        downloadUrl: `/api/download/images/${folderName}/${fileName}`
+      };
+    });
+    
+    res.json({
+      folderName: folderName,
+      folderPath: folderPath,
+      totalFiles: files.length,
+      files: fileDetails,
+      imageFiles: fileDetails.filter(f => 
+        f.extension.toLowerCase() === '.png' || 
+        f.extension.toLowerCase() === '.jpg'
+      )
+    });
+    
+  } catch (error) {
+    console.error('❌ 調試 API 錯誤:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // 統一下載函數
