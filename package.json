@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "system-check": "node system-check.js"
+    "system-check": "node system-check.js",
+    "debug-images": "node debug-images.js"
   },
   "dependencies": {
     "express": "^4.18.2",
