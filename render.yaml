@@ -1,13 +1,35 @@
 services:
   - type: web
-    name: your-app-name
+    name: liff-file-uploader
     env: node
     plan: free
     buildCommand: |
+      # 更新套件列表
       apt-get update
-      apt-get install -y imagemagick ghostscript
+      
+      # 安裝 GraphicsMagick, ImageMagick, 和其他必要的工具
+      apt-get install -y \
+        graphicsmagick \
+        imagemagick \
+        ghostscript \
+        poppler-utils \
+        libreoffice \
+        fonts-liberation \
+        fonts-dejavu-core
+      
+      # 設定 ImageMagick 政策 (允許 PDF 處理)
+      sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml || true
+      
+      # 確保二進位檔案在 PATH 中
+      which convert || echo "convert not found"
+      which gm || echo "gm not found"
+      
+      # 安裝 Node.js 依賴
       npm install
+      
     startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PATH
+        value: /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
