@@ -364,7 +364,11 @@ async function processFileConversion(originalFile) {
       // 圖片檔案資訊
       imageFiles: {
         count: imageFiles.length,
+        // 批量下載 URL (可以是 ZIP 或資料夾資訊)
         downloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}` : null,
+        // ZIP 下載 URL
+        zipDownloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}/zip` : null,
+        // 個別檔案下載連結
         files: imageFiles.map((filePath, index) => ({
           name: path.basename(filePath),
           page: index + 1,
@@ -413,28 +417,54 @@ async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
         size: fileInfo.fileSize,
         uploadTime: fileInfo.uploadTime
       },
-      // PDF 下載連結
+      
+      // === PDF 下載資訊 ===
+      pdf: {
+        downloadUrl: conversionResult.pdfFile.downloadUrl,
+        fileName: conversionResult.pdfFile.name,
+        fileSize: conversionResult.pdfFile.size
+      },
+      
+      // === 圖片下載資訊 ===
+      images: {
+        // 批量下載連結 (ZIP 或資料夾)
+        batchDownloadUrl: conversionResult.imageFiles.downloadUrl,
+        // 圖片數量
+        count: conversionResult.imageFiles.count,
+        // 個別圖片下載連結陣列
+        files: conversionResult.imageFiles.files.map(img => ({
+          page: img.page,
+          fileName: img.name,
+          downloadUrl: img.downloadUrl
+        }))
+      },
+      
+      // === 相容性欄位 (舊版本) ===
       pdfDownloadUrl: conversionResult.pdfFile.downloadUrl,
-      // 圖片下載連結 (如果有的話)
       imagesDownloadUrl: conversionResult.imageFiles.downloadUrl,
+      
+      // === 轉換詳情 ===
       conversionDetails: {
         pdfFileName: conversionResult.pdfFile.name,
         pdfSize: conversionResult.pdfFile.size,
         imageCount: conversionResult.imageFiles.count,
         processTime: conversionResult.processTime,
-        // 個別圖片下載連結（如果需要的話）
-        individualImages: conversionResult.imageFiles.files.map(img => ({
-          page: img.page,
-          downloadUrl: img.downloadUrl
-        }))
+        hasImages: conversionResult.imageFiles.count > 0
       }
     };
 
-    console.log('🎯 發送到 N8N 的資料:', {
-      PDF: n8nData.pdfDownloadUrl,
-      圖片: n8nData.imagesDownloadUrl || '無',
-      圖片數量: n8nData.conversionDetails.imageCount
-    });
+    // 詳細的日誌輸出
+    console.log('🎯 發送到 N8N 的資料:');
+    console.log('  📄 PDF:', n8nData.pdf.downloadUrl);
+    console.log('  🖼️ 圖片批量:', n8nData.images.batchDownloadUrl || '無');
+    console.log('  📊 圖片數量:', n8nData.images.count);
+    
+    if (n8nData.images.files && n8nData.images.files.length > 0) {
+      console.log('  📋 個別圖片:');
+      n8nData.images.files.forEach((img, index) => {
+        console.log(`    ${index + 1}. ${img.fileName} - ${img.downloadUrl}`);
+      });
+    }
 
     const response = await axios.post(webhookUrl, n8nData, {
       headers: {
@@ -446,10 +476,15 @@ async function sendConversionResultToN8N(userId, fileInfo, conversionResult) {
     });
 
     console.log('✅ N8N Webhook 觸發成功！');
+    console.log('📡 回應狀態:', response.status);
+    
     return true;
 
   } catch (error) {
     console.error('❌ 發送到 N8N 失敗:', error.message);
+    if (error.response) {
+      console.error('📡 N8N 回應錯誤:', error.response.status, error.response.data);
+    }
     return false;
   }
 }
@@ -609,6 +644,7 @@ app.get('/api/download/pdf/:filename', (req, res) => {
   downloadFile(res, filePath, 'PDF檔案');
 });
 
+// 圖片資料夾資訊
 app.get('/api/download/images/:folder', async (req, res) => {
   try {
     const folderName = req.params.folder;
@@ -628,7 +664,9 @@ app.get('/api/download/images/:folder', async (req, res) => {
         name: fileName,
         page: index + 1,
         downloadUrl: `/api/download/images/${folderName}/${fileName}`
-      }))
+      })),
+      // 提供 ZIP 下載連結
+      zipDownloadUrl: `/api/download/images/${folderName}/zip`
     });
 
   } catch (error) {
@@ -637,6 +675,73 @@ app.get('/api/download/images/:folder', async (req, res) => {
   }
 });
 
+// ZIP 下載所有圖片
+app.get('/api/download/images/:folder/zip', async (req, res) => {
+  try {
+    const folderName = req.params.folder;
+    const folderPath = path.join(imageDir, folderName);
+    
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({ error: '圖片資料夾不存在' });
+    }
+
+    // 動態載入 archiver（如果需要的話）
+    let archiver;
+    try {
+      archiver = require('archiver');
+    } catch (e) {
+      // 如果沒有 archiver，提供替代方案
+      return res.status(501).json({ 
+        error: 'ZIP 功能不可用',
+        message: '請使用個別圖片下載連結',
+        alternativeEndpoint: `/api/download/images/${folderName}`
+      });
+    }
+
+    const files = fs.readdirSync(folderPath);
+    const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png') || f.toLowerCase().endsWith('.jpg'));
+    
+    if (imageFiles.length === 0) {
+      return res.status(404).json({ error: '資料夾中沒有圖片檔案' });
+    }
+
+    console.log('📦 建立 ZIP 檔案:', folderName, imageFiles.length, '張圖片');
+
+    // 設定回應標頭
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${folderName}-images.zip"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
+    // 建立 ZIP 檔案
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    
+    archive.on('error', (err) => {
+      console.error('❌ ZIP 建立錯誤:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'ZIP 檔案建立失敗' });
+      }
+    });
+
+    archive.pipe(res);
+
+    // 添加所有圖片到 ZIP
+    imageFiles.forEach((fileName, index) => {
+      const filePath = path.join(folderPath, fileName);
+      archive.file(filePath, { name: `page-${index + 1}-${fileName}` });
+    });
+
+    await archive.finalize();
+    console.log('✅ ZIP 下載完成:', folderName);
+
+  } catch (error) {
+    console.error('❌ ZIP 下載錯誤:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'ZIP 下載失敗' });
+    }
+  }
+});
+
+// 單個圖片下載
 app.get('/api/download/images/:folder/:filename', (req, res) => {
   const folderName = req.params.folder;
   const filename = req.params.filename;
