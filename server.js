@@ -87,9 +87,10 @@ console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
 
 // 基本中介軟體
 app.use(cors({
-  origin: '*',
+  origin: '*', // 允許所有來源，包括 OpenAI
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-line-userid', 'x-line-signature']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-line-userid', 'x-line-signature', 'User-Agent'],
+  credentials: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
@@ -98,6 +99,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // 請求日誌
 app.use((req, res, next) => {
   console.log(`📝 ${new Date().toISOString()} - ${req.method} ${req.url}`);
+  if (req.get('User-Agent')) {
+    console.log(`   User-Agent: ${req.get('User-Agent').substring(0, 50)}...`);
+  }
   next();
 });
 
@@ -110,7 +114,386 @@ const imageDir = path.join(__dirname, 'images');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log('📁 建立資料夾:', dir);
+});
+
+// ZIP 下載所有圖片
+app.get('/api/download/images/:folder/zip', async (req, res) => {
+  try {
+    const folderName = req.params.folder;
+    const folderPath = path.join(imageDir, folderName);
+    
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({ error: '圖片資料夾不存在' });
+    }
+
+    // 動態載入 archiver（如果需要的話）
+    let archiver;
+    try {
+      archiver = require('archiver');
+    } catch (e) {
+      // 如果沒有 archiver，提供替代方案
+      return res.status(501).json({ 
+        error: 'ZIP 功能不可用',
+        message: '請使用個別圖片下載連結',
+        alternativeEndpoint: `/api/download/images/${folderName}`
+      });
+    }
+
+    const files = fs.readdirSync(folderPath);
+    const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png') || f.toLowerCase().endsWith('.jpg'));
+    
+    if (imageFiles.length === 0) {
+      return res.status(404).json({ error: '資料夾中沒有圖片檔案' });
+    }
+
+    console.log('📦 建立 ZIP 檔案:', folderName, imageFiles.length, '張圖片');
+
+    // 設定回應標頭
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${folderName}-images.zip"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    // 建立 ZIP 檔案
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    
+    archive.on('error', (err) => {
+      console.error('❌ ZIP 建立錯誤:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'ZIP 檔案建立失敗' });
+      }
+    });
+
+    archive.pipe(res);
+
+    // 添加所有圖片到 ZIP
+    imageFiles.forEach((fileName, index) => {
+      const filePath = path.join(folderPath, fileName);
+      archive.file(filePath, { name: `page-${index + 1}-${fileName}` });
+    });
+
+    await archive.finalize();
+    console.log('✅ ZIP 下載完成:', folderName);
+
+  } catch (error) {
+    console.error('❌ ZIP 下載錯誤:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'ZIP 下載失敗' });
+    }
   }
+});
+
+// 單個圖片下載 - 優化給 OpenAI 使用
+app.get('/api/download/images/:folder/:filename', (req, res) => {
+  const folderName = req.params.folder;
+  const filename = req.params.filename;
+  const filePath = path.join(imageDir, folderName, filename);
+  
+  console.log('🖼️ 圖片下載請求詳情:');
+  console.log('  來源:', req.get('User-Agent') || 'Unknown');
+  console.log('  資料夾:', folderName);
+  console.log('  檔案名:', filename);
+  console.log('  完整路徑:', filePath);
+  console.log('  檔案存在:', fs.existsSync(filePath));
+  
+  // 如果檔案不存在，嘗試列出資料夾內容來調試
+  if (!fs.existsSync(filePath)) {
+    const folderPath = path.join(imageDir, folderName);
+    console.log('❌ 檔案不存在，檢查資料夾內容:');
+    console.log('  資料夾路徑:', folderPath);
+    console.log('  資料夾存在:', fs.existsSync(folderPath));
+    
+    if (fs.existsSync(folderPath)) {
+      try {
+        const files = fs.readdirSync(folderPath);
+        console.log('  資料夾內容:', files);
+        
+        // 尋找相似的檔案名
+        const similarFiles = files.filter(f => 
+          f.includes(path.parse(filename).name.split('-')[0]) || 
+          f.includes(path.parse(filename).name)
+        );
+        console.log('  相似檔案:', similarFiles);
+        
+        // 如果找到完全匹配的檔案，重新導向
+        if (files.includes(filename)) {
+          console.log('✅ 找到檔案，重新嘗試下載');
+          return downloadFile(res, filePath, '圖片檔案');
+        }
+        
+        // 如果找到相似檔案，建議正確的檔名
+        if (similarFiles.length > 0) {
+          console.log('💡 建議使用:', similarFiles[0]);
+          return res.status(404).json({ 
+            error: '檔案不存在',
+            suggestion: similarFiles[0],
+            correctUrl: `/api/download/images/${folderName}/${similarFiles[0]}`,
+            availableFiles: files
+          });
+        }
+        
+      } catch (readError) {
+        console.error('❌ 讀取資料夾失敗:', readError);
+      }
+    }
+    
+    return res.status(404).json({ 
+      error: '圖片檔案不存在',
+      folderName: folderName,
+      fileName: filename,
+      fullPath: filePath
+    });
+  }
+  
+  downloadFileForImage(res, filePath, '圖片檔案');
+});
+
+// 新增：調試用的資料夾檢查 API
+app.get('/api/debug/images/:folder', (req, res) => {
+  try {
+    const folderName = req.params.folder;
+    const folderPath = path.join(imageDir, folderName);
+    
+    console.log('🔍 調試資料夾:', folderPath);
+    
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({
+        error: '資料夾不存在',
+        folderPath: folderPath,
+        imageDir: imageDir
+      });
+    }
+    
+    const files = fs.readdirSync(folderPath);
+    const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    
+    const fileDetails = files.map(fileName => {
+      const filePath = path.join(folderPath, fileName);
+      const stats = fs.statSync(filePath);
+      return {
+        name: fileName,
+        size: stats.size,
+        isFile: stats.isFile(),
+        extension: path.extname(fileName),
+        downloadUrl: `${baseUrl}/api/download/images/${folderName}/${fileName}`
+      };
+    });
+    
+    res.json({
+      folderName: folderName,
+      folderPath: folderPath,
+      baseUrl: baseUrl,
+      totalFiles: files.length,
+      files: fileDetails,
+      imageFiles: fileDetails.filter(f => 
+        f.extension.toLowerCase() === '.png' || 
+        f.extension.toLowerCase() === '.jpg'
+      )
+    });
+    
+  } catch (error) {
+    console.error('❌ 調試 API 錯誤:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 統一下載函數
+function downloadFile(res, filePath, fileType) {
+  try {
+    console.log(`📥 ${fileType}下載請求:`, path.basename(filePath));
+    
+    if (!fs.existsSync(filePath)) {
+      console.log(`❌ ${fileType}不存在:`, path.basename(filePath));
+      return res.status(404).json({ error: `${fileType}不存在` });
+    }
+    
+    const ext = path.extname(filePath).toLowerCase();
+    let contentType = 'application/octet-stream';
+    
+    switch (ext) {
+      case '.pdf':
+        contentType = 'application/pdf';
+        break;
+      case '.png':
+        contentType = 'image/png';
+        break;
+      case '.jpg':
+      case '.jpeg':
+        contentType = 'image/jpeg';
+        break;
+    }
+    
+    const filename = path.basename(filePath);
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    console.log(`✅ 開始下載${fileType}:`, filename);
+    res.sendFile(filePath);
+    
+  } catch (error) {
+    console.error(`❌ ${fileType}下載錯誤:`, error);
+    res.status(500).json({ error: `${fileType}下載失敗` });
+  }
+}
+
+// 專門給圖片使用的下載函數（優化給 OpenAI）
+function downloadFileForImage(res, filePath, fileType) {
+  try {
+    console.log(`📥 ${fileType}下載請求:`, path.basename(filePath));
+    console.log('  來源 User-Agent:', res.req.get('User-Agent')?.substring(0, 50) || 'Unknown');
+    
+    if (!fs.existsSync(filePath)) {
+      console.log(`❌ ${fileType}不存在:`, path.basename(filePath));
+      return res.status(404).json({ error: `${fileType}不存在` });
+    }
+    
+    const ext = path.extname(filePath).toLowerCase();
+    let contentType = 'image/png'; // 預設為 PNG
+    
+    switch (ext) {
+      case '.png':
+        contentType = 'image/png';
+        break;
+      case '.jpg':
+      case '.jpeg':
+        contentType = 'image/jpeg';
+        break;
+      default:
+        contentType = 'image/png';
+        break;
+    }
+    
+    const filename = path.basename(filePath);
+    const stats = fs.statSync(filePath);
+    
+    // 設置適當的 headers 給 OpenAI 和其他客戶端
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', stats.size);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, User-Agent');
+    
+    // 對於一般瀏覽器訪問，設置為下載
+    // 對於 API 客戶端（如 OpenAI），設置為 inline
+    const userAgent = res.req.get('User-Agent') || '';
+    if (userAgent.includes('Mozilla') && !userAgent.includes('API')) {
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    } else {
+      // API 客戶端使用 inline
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    }
+    
+    console.log(`✅ 開始傳送${fileType}:`, filename, `(${(stats.size/1024).toFixed(1)}KB)`);
+    
+    // 直接傳送檔案
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error(`❌ 傳送${fileType}失敗:`, err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: `${fileType}傳送失敗` });
+        }
+      } else {
+        console.log(`✅ ${fileType}傳送完成:`, filename);
+      }
+    });
+    
+  } catch (error) {
+    console.error(`❌ ${fileType}下載錯誤:`, error);
+    res.status(500).json({ error: `${fileType}下載失敗` });
+  }
+}
+
+// 靜態檔案服務
+app.use('/pdfs', express.static(pdfDir));
+app.use('/images', express.static(imageDir));
+app.use(express.static(__dirname));
+
+// 根路由
+app.get('/', (req, res) => {
+  console.log('🏠 根路由請求');
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Catch-all 路由
+app.get('*', (req, res) => {
+  console.log('🔍 未匹配路由:', req.url);
+  if (req.url.startsWith('/api/')) {
+    res.status(404).json({ error: 'API 路由不存在' });
+  } else {
+    res.sendFile(path.join(__dirname, 'index.html'));
+  }
+});
+
+// 錯誤處理
+app.use((err, req, res, next) => {
+  console.error('❌ 全域錯誤:', err);
+  res.status(500).json({ error: '伺服器錯誤' });
+});
+
+// 伺服器初始化
+const initializeServer = async () => {
+  // 載入轉換模組
+  await loadConversionModules();
+  
+  // 啟動伺服器
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    
+    console.log('🎉 文件轉換伺服器啟動成功！');
+    console.log(`🌐 Server URL: ${baseUrl}`);
+    console.log(`🏠 Local URL: http://localhost:${PORT}`);
+    console.log(`📁 資料夾:`);
+    console.log(`   📤 上傳: ${uploadDir}`);
+    console.log(`   📄 PDF: ${pdfDir}`);
+    console.log(`   🖼️ 圖片: ${imageDir}`);
+    console.log(`🔧 轉換功能:`);
+    console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
+    console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
+    console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
+    console.log('================================');
+    
+    if (!libreOfficeConvert) {
+      console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
+      console.log('   使用者只能上傳 PDF 檔案');
+    }
+    
+    if (!pdf2pic) {
+      console.log('⚠️ 注意：PDF 轉圖片功能不可用');
+      console.log('   只會提供 PDF 下載連結');
+    }
+    
+    console.log('✨ 系統流程：');
+    console.log('   📤 檔案上傳');
+    console.log('   📄 轉換為 PDF (如果需要)');
+    console.log('   🖼️ 轉換為圖片 (如果可用)');
+    console.log('   🎯 發送完整 URL 到 N8N');
+    console.log('   ✅ 回傳簡單確認給前端');
+    console.log('================================');
+    console.log('🔗 測試連結：');
+    console.log(`   健康檢查: ${baseUrl}/api/health`);
+    console.log(`   測試 API: ${baseUrl}/api/test`);
+    console.log('================================');
+  });
+
+  // 優雅關閉
+  process.on('SIGTERM', () => {
+    console.log('📴 收到 SIGTERM，正在關閉伺服器...');
+    server.close(() => {
+      console.log('✅ 伺服器已關閉');
+      process.exit(0);
+    });
+  });
+};
+
+// 啟動應用程式
+initializeServer().catch(error => {
+  console.error('❌ 伺服器初始化失敗:', error);
+  process.exit(1);
 });
 
 // Multer 設定
@@ -390,8 +773,10 @@ async function processFileConversion(originalFile) {
       console.warn('⚠️ PDF2Pic 模組未載入，跳過圖片轉換');
     }
 
-    // 建立下載 URL
-    const baseUrl = process.env.FRONTEND_URL || `http://localhost:${PORT}`;
+    // 建立下載 URL - 確保使用完整的 URL
+    const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    console.log('🌐 使用 Base URL:', baseUrl);
+    
     const pdfFileName = path.basename(pdfPath);
     const imageFolderName = path.basename(imageOutputDir);
     
@@ -409,7 +794,7 @@ async function processFileConversion(originalFile) {
         downloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}` : null,
         // ZIP 下載 URL
         zipDownloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}/zip` : null,
-        // 個別檔案下載連結
+        // 個別檔案下載連結 - 確保是完整 URL
         files: imageFiles.map((filePath, index) => ({
           name: path.basename(filePath),
           page: index + 1,
@@ -422,7 +807,8 @@ async function processFileConversion(originalFile) {
     console.log('🎉 檔案轉換完成:', {
       '原檔': originalFile.originalname,
       'PDF': result.pdfFile.name,
-      '圖片數量': result.imageFiles.count
+      '圖片數量': result.imageFiles.count,
+      'Base URL': baseUrl
     });
 
     return result;
@@ -539,10 +925,13 @@ app.get('/api/health', async (req, res) => {
   // 檢查系統工具
   const systemTools = await checkSystemTools();
   
+  const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  
   res.json({ 
     status: 'ok',
     timestamp: new Date().toISOString(),
     port: PORT,
+    baseUrl: baseUrl,
     directories: {
       upload: uploadDir,
       pdf: pdfDir,
@@ -565,9 +954,12 @@ app.get('/api/health', async (req, res) => {
 // 測試 API
 app.get('/api/test', (req, res) => {
   console.log('🧪 測試 API');
+  const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  
   res.json({ 
     message: '文件轉換伺服器正常運作',
     timestamp: new Date().toISOString(),
+    baseUrl: baseUrl,
     features: ['檔案上傳', 'PDF轉換', '圖片轉換']
   });
 });
@@ -698,318 +1090,22 @@ app.get('/api/download/images/:folder', async (req, res) => {
     const files = fs.readdirSync(folderPath);
     const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png') || f.toLowerCase().endsWith('.jpg'));
     
+    const baseUrl = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    
     res.json({
       folder: folderName,
       count: imageFiles.length,
       files: imageFiles.map((fileName, index) => ({
         name: fileName,
         page: index + 1,
-        downloadUrl: `/api/download/images/${folderName}/${fileName}`
+        downloadUrl: `${baseUrl}/api/download/images/${folderName}/${fileName}`
       })),
       // 提供 ZIP 下載連結
-      zipDownloadUrl: `/api/download/images/${folderName}/zip`
+      zipDownloadUrl: `${baseUrl}/api/download/images/${folderName}/zip`
     });
 
   } catch (error) {
     console.error('❌ 列出圖片失敗:', error);
     res.status(500).json({ error: '無法存取圖片資料夾' });
   }
-});
-
-// ZIP 下載所有圖片
-app.get('/api/download/images/:folder/zip', async (req, res) => {
-  try {
-    const folderName = req.params.folder;
-    const folderPath = path.join(imageDir, folderName);
-    
-    if (!fs.existsSync(folderPath)) {
-      return res.status(404).json({ error: '圖片資料夾不存在' });
-    }
-
-    // 動態載入 archiver（如果需要的話）
-    let archiver;
-    try {
-      archiver = require('archiver');
-    } catch (e) {
-      // 如果沒有 archiver，提供替代方案
-      return res.status(501).json({ 
-        error: 'ZIP 功能不可用',
-        message: '請使用個別圖片下載連結',
-        alternativeEndpoint: `/api/download/images/${folderName}`
-      });
-    }
-
-    const files = fs.readdirSync(folderPath);
-    const imageFiles = files.filter(f => f.toLowerCase().endsWith('.png') || f.toLowerCase().endsWith('.jpg'));
-    
-    if (imageFiles.length === 0) {
-      return res.status(404).json({ error: '資料夾中沒有圖片檔案' });
-    }
-
-    console.log('📦 建立 ZIP 檔案:', folderName, imageFiles.length, '張圖片');
-
-    // 設定回應標頭
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${folderName}-images.zip"`);
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-
-    // 建立 ZIP 檔案
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    
-    archive.on('error', (err) => {
-      console.error('❌ ZIP 建立錯誤:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'ZIP 檔案建立失敗' });
-      }
-    });
-
-    archive.pipe(res);
-
-    // 添加所有圖片到 ZIP
-    imageFiles.forEach((fileName, index) => {
-      const filePath = path.join(folderPath, fileName);
-      archive.file(filePath, { name: `page-${index + 1}-${fileName}` });
-    });
-
-    await archive.finalize();
-    console.log('✅ ZIP 下載完成:', folderName);
-
-  } catch (error) {
-    console.error('❌ ZIP 下載錯誤:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'ZIP 下載失敗' });
-    }
-  }
-});
-
-// 單個圖片下載
-app.get('/api/download/images/:folder/:filename', (req, res) => {
-  const folderName = req.params.folder;
-  const filename = req.params.filename;
-  const filePath = path.join(imageDir, folderName, filename);
-  
-  console.log('🖼️ 圖片下載請求詳情:');
-  console.log('  資料夾:', folderName);
-  console.log('  檔案名:', filename);
-  console.log('  完整路徑:', filePath);
-  console.log('  檔案存在:', fs.existsSync(filePath));
-  
-  // 如果檔案不存在，嘗試列出資料夾內容來調試
-  if (!fs.existsSync(filePath)) {
-    const folderPath = path.join(imageDir, folderName);
-    console.log('❌ 檔案不存在，檢查資料夾內容:');
-    console.log('  資料夾路徑:', folderPath);
-    console.log('  資料夾存在:', fs.existsSync(folderPath));
-    
-    if (fs.existsSync(folderPath)) {
-      try {
-        const files = fs.readdirSync(folderPath);
-        console.log('  資料夾內容:', files);
-        
-        // 尋找相似的檔案名
-        const similarFiles = files.filter(f => 
-          f.includes(path.parse(filename).name.split('-')[0]) || 
-          f.includes(path.parse(filename).name)
-        );
-        console.log('  相似檔案:', similarFiles);
-        
-        // 如果找到完全匹配的檔案，重新導向
-        if (files.includes(filename)) {
-          console.log('✅ 找到檔案，重新嘗試下載');
-          return downloadFile(res, filePath, '圖片檔案');
-        }
-        
-        // 如果找到相似檔案，建議正確的檔名
-        if (similarFiles.length > 0) {
-          console.log('💡 建議使用:', similarFiles[0]);
-          return res.status(404).json({ 
-            error: '檔案不存在',
-            suggestion: similarFiles[0],
-            correctUrl: `/api/download/images/${folderName}/${similarFiles[0]}`,
-            availableFiles: files
-          });
-        }
-        
-      } catch (readError) {
-        console.error('❌ 讀取資料夾失敗:', readError);
-      }
-    }
-    
-    return res.status(404).json({ 
-      error: '圖片檔案不存在',
-      folderName: folderName,
-      fileName: filename,
-      fullPath: filePath
-    });
-  }
-  
-  downloadFile(res, filePath, '圖片檔案');
-});
-
-// 新增：調試用的資料夾檢查 API
-app.get('/api/debug/images/:folder', (req, res) => {
-  try {
-    const folderName = req.params.folder;
-    const folderPath = path.join(imageDir, folderName);
-    
-    console.log('🔍 調試資料夾:', folderPath);
-    
-    if (!fs.existsSync(folderPath)) {
-      return res.status(404).json({
-        error: '資料夾不存在',
-        folderPath: folderPath,
-        imageDir: imageDir
-      });
-    }
-    
-    const files = fs.readdirSync(folderPath);
-    const fileDetails = files.map(fileName => {
-      const filePath = path.join(folderPath, fileName);
-      const stats = fs.statSync(filePath);
-      return {
-        name: fileName,
-        size: stats.size,
-        isFile: stats.isFile(),
-        extension: path.extname(fileName),
-        downloadUrl: `/api/download/images/${folderName}/${fileName}`
-      };
-    });
-    
-    res.json({
-      folderName: folderName,
-      folderPath: folderPath,
-      totalFiles: files.length,
-      files: fileDetails,
-      imageFiles: fileDetails.filter(f => 
-        f.extension.toLowerCase() === '.png' || 
-        f.extension.toLowerCase() === '.jpg'
-      )
-    });
-    
-  } catch (error) {
-    console.error('❌ 調試 API 錯誤:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 統一下載函數
-function downloadFile(res, filePath, fileType) {
-  try {
-    console.log(`📥 ${fileType}下載請求:`, path.basename(filePath));
-    
-    if (!fs.existsSync(filePath)) {
-      console.log(`❌ ${fileType}不存在:`, path.basename(filePath));
-      return res.status(404).json({ error: `${fileType}不存在` });
-    }
-    
-    const ext = path.extname(filePath).toLowerCase();
-    let contentType = 'application/octet-stream';
-    
-    switch (ext) {
-      case '.pdf':
-        contentType = 'application/pdf';
-        break;
-      case '.png':
-        contentType = 'image/png';
-        break;
-      case '.jpg':
-      case '.jpeg':
-        contentType = 'image/jpeg';
-        break;
-    }
-    
-    const filename = path.basename(filePath);
-    
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-    
-    console.log(`✅ 開始下載${fileType}:`, filename);
-    res.sendFile(filePath);
-    
-  } catch (error) {
-    console.error(`❌ ${fileType}下載錯誤:`, error);
-    res.status(500).json({ error: `${fileType}下載失敗` });
-  }
-}
-
-// 靜態檔案服務
-app.use('/pdfs', express.static(pdfDir));
-app.use('/images', express.static(imageDir));
-app.use(express.static(__dirname));
-
-// 根路由
-app.get('/', (req, res) => {
-  console.log('🏠 根路由請求');
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// Catch-all 路由
-app.get('*', (req, res) => {
-  console.log('🔍 未匹配路由:', req.url);
-  if (req.url.startsWith('/api/')) {
-    res.status(404).json({ error: 'API 路由不存在' });
-  } else {
-    res.sendFile(path.join(__dirname, 'index.html'));
-  }
-});
-
-// 錯誤處理
-app.use((err, req, res, next) => {
-  console.error('❌ 全域錯誤:', err);
-  res.status(500).json({ error: '伺服器錯誤' });
-});
-
-// 伺服器初始化
-const initializeServer = async () => {
-  // 載入轉換模組
-  await loadConversionModules();
-  
-  // 啟動伺服器
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log('🎉 文件轉換伺服器啟動成功！');
-    console.log(`🌐 Server URL: http://localhost:${PORT}`);
-    console.log(`📁 資料夾:`);
-    console.log(`   📤 上傳: ${uploadDir}`);
-    console.log(`   📄 PDF: ${pdfDir}`);
-    console.log(`   🖼️ 圖片: ${imageDir}`);
-    console.log(`🔧 轉換功能:`);
-    console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
-    console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
-    console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
-    console.log('================================');
-    
-    if (!libreOfficeConvert) {
-      console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
-      console.log('   使用者只能上傳 PDF 檔案');
-    }
-    
-    if (!pdf2pic) {
-      console.log('⚠️ 注意：PDF 轉圖片功能不可用');
-      console.log('   只會提供 PDF 下載連結');
-    }
-    
-    console.log('✨ 系統流程：');
-    console.log('   📤 檔案上傳');
-    console.log('   📄 轉換為 PDF (如果需要)');
-    console.log('   🖼️ 轉換為圖片 (如果可用)');
-    console.log('   🎯 發送下載連結到 N8N');
-    console.log('   ✅ 回傳簡單確認給前端');
-    console.log('================================');
-  });
-
-  // 優雅關閉
-  process.on('SIGTERM', () => {
-    console.log('📴 收到 SIGTERM，正在關閉伺服器...');
-    server.close(() => {
-      console.log('✅ 伺服器已關閉');
-      process.exit(0);
-    });
-  });
-};
-
-// 啟動應用程式
-initializeServer().catch(error => {
-  console.error('❌ 伺服器初始化失敗:', error);
-  process.exit(1);
 });
