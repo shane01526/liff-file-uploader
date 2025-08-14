@@ -78,15 +78,22 @@ console.log('🚀 啟動增強版伺服器 (含使用者資訊)...');
 console.log('📍 Port:', PORT);
 console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
 
-// 基本中介軟體
+// 基本中介軟體 - 確保正確處理 UTF-8 編碼
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-line-userid', 'x-line-signature']
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// 確保正確處理 UTF-8 編碼
+app.use(express.json({ 
+  limit: '10mb',
+  type: 'application/json'
+}));
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '10mb'
+}));
 
 // 請求日誌
 app.use((req, res, next) => {
@@ -420,7 +427,7 @@ function createEnhancedLineMessage(userInfo, originalFileName, conversionResult)
 }
 
 /**
- * 發送增強版 LINE 風格訊息到 N8N (含完整使用者資訊和下載連結)
+ * 發送增強版 LINE 風格訊息到 N8N (修正中文編碼問題)
  */
 async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
   try {
@@ -435,7 +442,7 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
     const replyToken = generateReplyToken();
     const messageText = createEnhancedLineMessage(userInfo, fileInfo.fileName, conversionResult);
 
-    // 增強版資料結構，包含完整使用者資訊和所有下載連結
+    // 增強版資料結構，確保中文字串正確編碼
     const enhancedLineData = {
       // === LINE Webhook 標準格式 ===
       destination: process.env.LINE_BOT_USER_ID || 'bot_destination',
@@ -457,9 +464,9 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
         }
       ],
       
-      // === 完整的使用者資訊 ===
+      // === 完整的使用者資訊 (確保中文字串正確) ===
       userInfo: {
-        name: userInfo.name,
+        name: userInfo.name,  // 保持原始中文字串
         email: userInfo.email || null,
         phone: userInfo.phone || null,
         liffUserId: userInfo.liffUserId || null,
@@ -469,7 +476,7 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
       // === 檔案處理資訊 ===
       fileProcessing: {
         originalFile: {
-          name: fileInfo.fileName,
+          name: fileInfo.fileName,  // 保持原始中文檔名
           size: fileInfo.fileSize,
           uploadTime: fileInfo.uploadTime
         },
@@ -541,13 +548,13 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
         shouldReplyToUser: true,
         replyToken: replyToken,
         messageType: 'file_conversion_completed',
-        userName: userInfo.name,
+        userName: userInfo.name,  // 保持原始中文姓名
         hasMultipleDownloads: conversionResult.imageFiles.count > 0,
         recommendedAction: 'send_download_links_with_user_greeting',
         
         // 建議的回覆格式
         suggestedReplyFormat: {
-          greeting: `${userInfo.name} 您好！`,
+          greeting: `${userInfo.name} 您好！`,  // 保持中文格式
           pdfLink: `📄 PDF: ${conversionResult.pdfFile.downloadUrl}`,
           imageLinks: conversionResult.imageFiles.count > 0 ? 
             `🖼️ 圖片 (${conversionResult.imageFiles.count}張): ${conversionResult.imageFiles.zipDownloadUrl}` : null
@@ -566,20 +573,31 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
       console.log('  📦 ZIP 連結:', conversionResult.imageFiles.zipDownloadUrl);
     }
 
-    // 發送到 N8N (修復標頭中文字元問題)
-    const response = await axios.post(webhookUrl, enhancedLineData, {
+    // 確保正確處理 UTF-8 編碼的請求
+    const requestConfig = {
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',  // 明確指定 UTF-8
         'User-Agent': 'LINE-Bot/1.0',
         'X-Line-Signature': 'mock-line-signature',
         'X-Source': 'line-bot-file-converter-enhanced',
         'X-Custom-Type': 'file-conversion-with-user-info',
-        'X-User-Name': encodeURIComponent(userInfo.name), // 編碼中文字元
+        // 移除可能有問題的中文標頭，改為在 body 中傳送
         'X-Has-Images': conversionResult.imageFiles.count > 0 ? 'true' : 'false',
-        'X-File-Count': conversionResult.imageFiles.count.toString()
+        'X-File-Count': conversionResult.imageFiles.count.toString(),
+        'Accept': 'application/json',
+        'Accept-Charset': 'utf-8'
       },
-      timeout: 15000
-    });
+      timeout: 15000,
+      // 確保請求資料正確序列化為 UTF-8
+      transformRequest: [function (data) {
+        return JSON.stringify(data);
+      }]
+    };
+
+    console.log('🌐 發送請求到 N8N，確保 UTF-8 編碼...');
+    
+    // 發送到 N8N
+    const response = await axios.post(webhookUrl, enhancedLineData, requestConfig);
 
     console.log('✅ 增強版訊息發送成功！');
     console.log('📡 N8N 回應狀態:', response.status);
@@ -622,7 +640,7 @@ app.get('/api/health', async (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     port: PORT,
-    version: 'enhanced-with-user-info',
+    version: 'enhanced-with-user-info-utf8-fixed',
     directories: {
       upload: uploadDir,
       pdf: pdfDir,
@@ -639,9 +657,10 @@ app.get('/api/health', async (req, res) => {
       imageConversion: !!pdf2pic,
       userInfoCollection: true,  // 新功能
       enhancedLineMessaging: true,  // 增強功能
-      completeDownloadLinks: true   // 完整下載連結
+      completeDownloadLinks: true,   // 完整下載連結
+      utf8ChineseSupport: true       // UTF-8 中文支援
     },
-    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定 (增強版)' : '未設定'
+    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定 (增強版-UTF8)' : '未設定'
   });
 });
 
@@ -649,7 +668,7 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/test', (req, res) => {
   console.log('🧪 測試 API');
   res.json({ 
-    message: '增強版文件轉換伺服器正常運作',
+    message: '增強版文件轉換伺服器正常運作 (UTF-8 中文支援)',
     timestamp: new Date().toISOString(),
     features: [
       '檔案上傳', 
@@ -657,9 +676,10 @@ app.get('/api/test', (req, res) => {
       '圖片轉換', 
       '使用者資訊收集', 
       '增強版LINE風格訊息',
-      '完整下載連結提供'
+      '完整下載連結提供',
+      'UTF-8 中文字串正確編碼'
     ],
-    version: 'enhanced-v2'
+    version: 'enhanced-v2-utf8'
   });
 });
 
@@ -684,7 +704,7 @@ app.post('/api/upload', (req, res) => {
         });
       }
 
-      // 提取使用者資訊
+      // 提取使用者資訊 - 確保正確處理 UTF-8 中文字串
       const userInfo = {
         name: req.body.userName?.trim(),
         email: req.body.userEmail?.trim() || null,
@@ -700,7 +720,12 @@ app.post('/api/upload', (req, res) => {
         });
       }
 
-      console.log('👤 使用者資訊:', userInfo);
+      // 記錄 UTF-8 字串長度和內容
+      console.log('👤 使用者資訊 (UTF-8):');
+      console.log('  姓名:', userInfo.name, '(長度:', userInfo.name.length, ')');
+      console.log('  Email:', userInfo.email);
+      console.log('  電話:', userInfo.phone);
+      console.log('  LIFF ID:', userInfo.liffUserId);
 
       const originalExt = path.extname(req.file.originalname).toLowerCase();
       
@@ -731,7 +756,7 @@ app.post('/api/upload', (req, res) => {
       };
 
       // 發送增強版 LINE 風格訊息到 N8N
-      console.log('💬 發送增強版訊息到 N8N...');
+      console.log('💬 發送增強版訊息到 N8N (UTF-8 編碼)...');
       const n8nResult = await sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult);
 
       // 清理原始上傳檔案
@@ -769,7 +794,7 @@ app.post('/api/upload', (req, res) => {
         downloadLinks: n8nResult.downloadLinks || null
       };
 
-      console.log('🏁 增強版轉換流程完成:', {
+      console.log('🏁 增強版轉換流程完成 (UTF-8):', {
         使用者: userInfo.name,
         檔案: fileInfo.fileName,
         'PDF': conversionResult.pdfFile.name,
@@ -821,14 +846,16 @@ app.get('/api/test-n8n-connection', async (req, res) => {
       type: 'connection_test',
       timestamp: new Date().toISOString(),
       message: 'N8N Webhook 連接測試',
-      source: 'liff-file-uploader'
+      source: 'liff-file-uploader',
+      encoding: 'UTF-8'
     };
 
     const response = await axios.post(webhookUrl, testData, {
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',
         'User-Agent': 'N8N-Test/1.0',
-        'X-Test': 'true'
+        'X-Test': 'true',
+        'Accept-Charset': 'utf-8'
       },
       timeout: 10000
     });
@@ -839,7 +866,7 @@ app.get('/api/test-n8n-connection', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'N8N Webhook 連接正常',
+      message: 'N8N Webhook 連接正常 (UTF-8 支援)',
       webhookUrl: webhookUrl,
       responseStatus: response.status,
       responseData: response.data
@@ -865,24 +892,27 @@ app.get('/api/test-n8n-connection', async (req, res) => {
         '檢查 N8N_WEBHOOK_URL 是否正確',
         '確認 N8N 服務是否運行',
         '檢查網路連接',
-        '確認 Webhook 端點是否啟用'
+        '確認 Webhook 端點是否啟用',
+        '確認 N8N 支援 UTF-8 編碼'
       ]
     });
   }
 });
+
+// 測試增強版 LINE 風格訊息 (含中文測試)
 app.post('/api/test-enhanced-message', async (req, res) => {
   try {
-    console.log('🧪 測試增強版 LINE 風格訊息');
+    console.log('🧪 測試增強版 LINE 風格訊息 (UTF-8 中文)');
     
     const { 
-      userName = '測試用戶', 
+      userName = '張小明', 
       userEmail = 'test@example.com',
       userPhone = '0912-345-678',
       userId = 'test-user-id',
-      fileName = 'test-resume.pdf' 
+      fileName = '我的履歷.pdf' 
     } = req.body;
     
-    // 模擬使用者資訊
+    // 模擬使用者資訊 (包含中文)
     const mockUserInfo = {
       name: userName,
       email: userEmail,
@@ -890,11 +920,15 @@ app.post('/api/test-enhanced-message', async (req, res) => {
       liffUserId: userId
     };
     
+    console.log('🧪 測試用中文使用者資訊:');
+    console.log('  姓名:', mockUserInfo.name, '(UTF-8 長度:', Buffer.byteLength(mockUserInfo.name, 'utf8'), '位元組)');
+    console.log('  檔名:', fileName, '(UTF-8 長度:', Buffer.byteLength(fileName, 'utf8'), '位元組)');
+    
     // 模擬轉換結果
     const mockConversionResult = {
       pdfFile: {
         name: fileName,
-        downloadUrl: `${process.env.FRONTEND_URL || `http://localhost:${PORT}`}/api/download/pdf/test-123-${fileName}`,
+        downloadUrl: `${process.env.FRONTEND_URL || `http://localhost:${PORT}`}/api/download/pdf/test-123-${encodeURIComponent(fileName)}`,
         size: 1024000
       },
       imageFiles: {
@@ -918,16 +952,30 @@ app.post('/api/test-enhanced-message', async (req, res) => {
     };
     
     // 發送測試訊息
+    console.log('📤 發送包含中文字串的測試訊息...');
     const n8nResult = await sendEnhancedMessageToN8N(mockUserInfo, mockFileInfo, mockConversionResult);
     
     res.json({
       success: true,
-      message: '增強版測試訊息已發送',
+      message: '增強版測試訊息已發送 (含 UTF-8 中文)',
       result: n8nResult,
       testData: {
         userInfo: mockUserInfo,
         fileInfo: mockFileInfo,
         conversionResult: mockConversionResult
+      },
+      utf8Info: {
+        userName: {
+          original: mockUserInfo.name,
+          byteLength: Buffer.byteLength(mockUserInfo.name, 'utf8'),
+          charLength: mockUserInfo.name.length
+        },
+        fileName: {
+          original: fileName,
+          byteLength: Buffer.byteLength(fileName, 'utf8'),
+          charLength: fileName.length,
+          encoded: encodeURIComponent(fileName)
+        }
       }
     });
     
@@ -1204,7 +1252,7 @@ const initializeServer = async () => {
   await loadConversionModules();
   
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log('🎉 增強版文件轉換伺服器啟動成功！');
+    console.log('🎉 增強版文件轉換伺服器啟動成功！(UTF-8 中文支援)');
     console.log(`🌐 Server URL: http://localhost:${PORT}`);
     console.log(`📁 資料夾:`);
     console.log(`   📤 上傳: ${uploadDir}`);
@@ -1216,22 +1264,24 @@ const initializeServer = async () => {
     console.log(`👤 使用者資訊收集: ✅`);
     console.log(`💬 增強版 LINE 風格訊息: ✅`);
     console.log(`🔗 完整下載連結提供: ✅`);
+    console.log(`🌏 UTF-8 中文字串支援: ✅`);
     console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
     console.log('================================');
     
-    console.log('✨ 增強版系統流程：');
-    console.log('   👤 收集使用者資訊 (姓名*、Email、電話)');
-    console.log('   📤 檔案上傳');
+    console.log('✨ 增強版系統流程 (UTF-8 中文支援)：');
+    console.log('   👤 收集使用者資訊 (中文姓名*、Email、電話)');
+    console.log('   📤 檔案上傳 (支援中文檔名)');
     console.log('   📄 轉換為 PDF (如果需要)');
     console.log('   🖼️ 轉換為圖片 (如果可用)');
-    console.log('   💬 生成個人化 LINE 風格訊息');
+    console.log('   💬 生成個人化 LINE 風格訊息 (中文)');
     console.log('   🔗 包含所有下載連結');
-    console.log('   🎯 發送完整資料到 N8N');
+    console.log('   🎯 發送完整資料到 N8N (UTF-8 編碼)');
     console.log('   ✅ 回傳確認給前端');
     console.log('================================');
     console.log('🧪 測試端點：');
-    console.log('   POST /api/test-enhanced-message - 測試增強版訊息');
+    console.log('   POST /api/test-enhanced-message - 測試增強版訊息 (含中文)');
     console.log('   GET /api/health - 系統健康檢查');
+    console.log('   GET /api/test-n8n-connection - N8N 連接測試');
     console.log('================================');
   });
 
