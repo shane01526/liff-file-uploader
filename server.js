@@ -43,7 +43,6 @@ const checkSystemTools = async () => {
 
 // 動態載入轉換模組
 const loadConversionModules = async () => {
-  // 先檢查系統工具
   const systemTools = await checkSystemTools();
   
   try {
@@ -52,11 +51,9 @@ const loadConversionModules = async () => {
     console.log('✅ LibreOffice 轉換模組載入成功');
   } catch (error) {
     console.warn('⚠️ LibreOffice 轉換模組載入失敗:', error.message);
-    console.warn('⚠️ 將跳過 DOC/DOCX 轉 PDF 功能');
   }
 
   try {
-    // 檢查必要的二進位檔案
     if (systemTools.gm === '❌ 不可用' && systemTools.convert === '❌ 不可用') {
       throw new Error('GraphicsMagick 和 ImageMagick 都不可用');
     }
@@ -64,12 +61,8 @@ const loadConversionModules = async () => {
     pdf2pic = require('pdf2pic');
     console.log('✅ PDF2Pic 轉換模組載入成功');
     
-    // 測試 PDF 轉換功能
-    console.log('🧪 測試 PDF 轉換工具...');
-    
   } catch (error) {
     console.warn('⚠️ PDF2Pic 轉換模組載入失敗:', error.message);
-    console.warn('⚠️ 將跳過 PDF 轉圖片功能');
   }
 };
 
@@ -81,7 +74,7 @@ if (fs.existsSync('.env')) {
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-console.log('🚀 啟動伺服器...');
+console.log('🚀 啟動增強版伺服器 (含使用者資訊)...');
 console.log('📍 Port:', PORT);
 console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
 
@@ -160,13 +153,8 @@ async function convertToPDF(inputPath, outputPath) {
       throw new Error('LibreOffice 轉換模組未載入，無法轉換 DOC/DOCX 檔案');
     }
 
-    // 讀取原始檔案
     const inputBuffer = fs.readFileSync(inputPath);
-    
-    // 轉換為 PDF
     const pdfBuffer = await libreOfficeConvert.convertAsync(inputBuffer, '.pdf', undefined);
-    
-    // 寫入 PDF 檔案
     fs.writeFileSync(outputPath, pdfBuffer);
     
     console.log('✅ PDF 轉換完成:', path.basename(outputPath));
@@ -179,7 +167,7 @@ async function convertToPDF(inputPath, outputPath) {
 }
 
 /**
- * 使用更強健的方式將 PDF 轉換為圖片
+ * PDF 轉換為圖片
  */
 async function convertPDFToImages(pdfPath, outputDir) {
   try {
@@ -189,26 +177,22 @@ async function convertPDFToImages(pdfPath, outputDir) {
       throw new Error('PDF2Pic 轉換模組未載入，無法轉換 PDF 為圖片');
     }
 
-    // 確保輸出目錄存在
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
     const baseName = path.basename(pdfPath, '.pdf');
     
-    // 嘗試不同的轉換配置
     const configs = [
-      // 配置 1: 使用 convert (ImageMagick) - 修正檔名格式
       {
         density: parseInt(process.env.PDF_CONVERT_DENSITY) || 200,
-        saveFilename: `${baseName}.%d`, // 使用 %d 格式，從 1 開始
+        saveFilename: `${baseName}.%d`,
         savePath: outputDir,
         format: process.env.IMAGE_OUTPUT_FORMAT || "png",
         width: parseInt(process.env.IMAGE_OUTPUT_WIDTH) || 1200,
         height: parseInt(process.env.IMAGE_OUTPUT_HEIGHT) || 1600,
         convert: "convert"
       },
-      // 配置 2: 使用 gm (GraphicsMagick)
       {
         density: parseInt(process.env.PDF_CONVERT_DENSITY) || 150,
         saveFilename: `${baseName}.%d`,
@@ -231,7 +215,6 @@ async function convertPDFToImages(pdfPath, outputDir) {
         
         if (results && results.length > 0) {
           console.log(`✅ 配置 ${i + 1} 轉換成功!`);
-          console.log('生成的檔案:', results.map(r => path.basename(r.path)));
           break;
         }
       } catch (error) {
@@ -242,17 +225,19 @@ async function convertPDFToImages(pdfPath, outputDir) {
     }
 
     if (!results || results.length === 0) {
-      throw lastError || new Error('所有轉換配置都失敗了');
+      try {
+        console.log('🔄 嘗試使用系統命令轉換...');
+        return await convertPDFUsingSystemCommand(pdfPath, outputDir);
+      } catch (fallbackError) {
+        throw lastError || fallbackError;
+      }
     }
 
-    // 驗證生成的檔案是否實際存在
     const imageFiles = [];
     for (const result of results) {
       if (fs.existsSync(result.path)) {
         imageFiles.push(result.path);
         console.log('✅ 確認檔案存在:', path.basename(result.path));
-      } else {
-        console.warn('⚠️ 檔案不存在:', result.path);
       }
     }
 
@@ -265,68 +250,48 @@ async function convertPDFToImages(pdfPath, outputDir) {
     
   } catch (error) {
     console.error('❌ 圖片轉換失敗:', error);
-    
-    // 作為備選方案，嘗試使用系統命令直接轉換
-    try {
-      console.log('🔄 嘗試使用系統命令轉換...');
-      const fallbackResult = await convertPDFUsingSystemCommand(pdfPath, outputDir);
-      return fallbackResult;
-    } catch (fallbackError) {
-      console.error('❌ 系統命令轉換也失敗:', fallbackError);
-      throw error; // 拋出原始錯誤
-    }
+    throw error;
   }
 }
 
 /**
- * 使用系統命令直接轉換 PDF 為圖片（備選方案）
+ * 使用系統命令轉換 PDF 為圖片
  */
 async function convertPDFUsingSystemCommand(pdfPath, outputDir) {
   return new Promise((resolve, reject) => {
     const baseName = path.basename(pdfPath, '.pdf');
     const outputPattern = path.join(outputDir, `${baseName}-%d.png`);
-    
-    // 嘗試使用 convert 命令
     const convertCmd = `convert -density 200 -quality 85 "${pdfPath}" "${outputPattern}"`;
     
     console.log('🔧 執行系統命令:', convertCmd);
     
     exec(convertCmd, (error, stdout, stderr) => {
       if (error) {
-        console.error('❌ 系統命令執行失敗:', error);
         reject(error);
         return;
       }
       
       try {
-        // 檢查生成的檔案
         const files = fs.readdirSync(outputDir);
-        console.log('📁 輸出目錄中的檔案:', files);
-        
         let imageFiles = files
           .filter(f => f.startsWith(baseName) && (f.endsWith('.png') || f.endsWith('.jpg')))
           .map(f => path.join(outputDir, f))
           .sort();
         
-        // 如果沒有找到預期格式的檔案，嘗試其他可能的格式
         if (imageFiles.length === 0) {
-          console.log('🔍 尋找其他格式的圖片檔案...');
           imageFiles = files
             .filter(f => f.endsWith('.png') || f.endsWith('.jpg'))
             .map(f => path.join(outputDir, f))
             .sort();
         }
         
-        // 驗證檔案是否真實存在且大小合理
         const validImageFiles = [];
         for (const filePath of imageFiles) {
           try {
             const stats = fs.statSync(filePath);
-            if (stats.size > 100) { // 至少 100 bytes
+            if (stats.size > 100) {
               validImageFiles.push(filePath);
               console.log('✅ 有效圖片檔案:', path.basename(filePath), `(${(stats.size/1024).toFixed(1)}KB)`);
-            } else {
-              console.warn('⚠️ 檔案太小，可能損壞:', path.basename(filePath));
             }
           } catch (statError) {
             console.warn('⚠️ 無法讀取檔案狀態:', path.basename(filePath));
@@ -338,11 +303,9 @@ async function convertPDFUsingSystemCommand(pdfPath, outputDir) {
           return;
         }
         
-        console.log('✅ 系統命令轉換成功:', validImageFiles.length, '張圖片');
         resolve(validImageFiles);
         
       } catch (fsError) {
-        console.error('❌ 檔案系統錯誤:', fsError);
         reject(fsError);
       }
     });
@@ -358,24 +321,18 @@ async function processFileConversion(originalFile) {
     const originalName = path.parse(originalFile.originalname).name;
     const originalExt = path.extname(originalFile.originalname).toLowerCase();
     
-    let pdfPath;
-
-    // 步驟 1: 一律轉換為 PDF
-    pdfPath = path.join(pdfDir, `${timestamp}-${originalName}.pdf`);
+    let pdfPath = path.join(pdfDir, `${timestamp}-${originalName}.pdf`);
     
     if (originalExt === '.pdf') {
-      // 如果已經是 PDF，直接複製
       fs.copyFileSync(originalFile.path, pdfPath);
       console.log('📄 檔案已是 PDF 格式，複製到 PDF 目錄');
     } else {
-      // DOC/DOCX 轉 PDF
       if (!libreOfficeConvert) {
         throw new Error('系統不支援 DOC/DOCX 轉換功能，請直接上傳 PDF 檔案');
       }
       await convertToPDF(originalFile.path, pdfPath);
     }
 
-    // 步驟 2: PDF 轉圖片
     const imageOutputDir = path.join(imageDir, `${timestamp}-${originalName}`);
     let imageFiles = [];
     
@@ -384,32 +341,23 @@ async function processFileConversion(originalFile) {
         imageFiles = await convertPDFToImages(pdfPath, imageOutputDir);
       } catch (imageError) {
         console.warn('⚠️ 圖片轉換失敗，但 PDF 轉換成功:', imageError.message);
-        // 如果圖片轉換失敗，至少還有 PDF
       }
-    } else {
-      console.warn('⚠️ PDF2Pic 模組未載入，跳過圖片轉換');
     }
 
-    // 建立下載 URL
     const baseUrl = process.env.FRONTEND_URL || `http://localhost:${PORT}`;
     const pdfFileName = path.basename(pdfPath);
     const imageFolderName = path.basename(imageOutputDir);
     
     const result = {
-      // PDF 檔案資訊
       pdfFile: {
         name: `${originalName}.pdf`,
         downloadUrl: `${baseUrl}/api/download/pdf/${pdfFileName}`,
         size: fs.statSync(pdfPath).size
       },
-      // 圖片檔案資訊
       imageFiles: {
         count: imageFiles.length,
-        // 批量下載 URL (可以是 ZIP 或資料夾資訊)
         downloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}` : null,
-        // ZIP 下載 URL
         zipDownloadUrl: imageFiles.length > 0 ? `${baseUrl}/api/download/images/${imageFolderName}/zip` : null,
-        // 個別檔案下載連結
         files: imageFiles.map((filePath, index) => ({
           name: path.basename(filePath),
           page: index + 1,
@@ -419,12 +367,6 @@ async function processFileConversion(originalFile) {
       processTime: new Date().toISOString()
     };
 
-    console.log('🎉 檔案轉換完成:', {
-      '原檔': originalFile.originalname,
-      'PDF': result.pdfFile.name,
-      '圖片數量': result.imageFiles.count
-    });
-
     return result;
 
   } catch (error) {
@@ -433,13 +375,12 @@ async function processFileConversion(originalFile) {
   }
 }
 
-// ============= N8N 通知功能（模仿 LINE 訊息格式）=============
+// ============= 增強版 N8N 通知功能 =============
 
 /**
- * 生成 reply token (模擬 LINE 的 reply token 格式)
+ * 生成 reply token
  */
 function generateReplyToken() {
-  // LINE reply token 格式通常是一個長的隨機字串
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let token = '';
   for (let i = 0; i < 64; i++) {
@@ -449,10 +390,10 @@ function generateReplyToken() {
 }
 
 /**
- * 構造 LINE 風格的訊息內容
+ * 構造包含下載連結的 LINE 風格訊息
  */
-function createLineStyleMessage(originalFileName, conversionResult) {
-  let messageText = `📄 檔案轉換完成！\n\n`;
+function createEnhancedLineMessage(userInfo, originalFileName, conversionResult) {
+  let messageText = `📄 ${userInfo.name} 您好！檔案轉換完成！\n\n`;
   messageText += `原檔案：${originalFileName}\n`;
   messageText += `轉換時間：${new Date().toLocaleString('zh-TW')}\n\n`;
   
@@ -465,10 +406,9 @@ function createLineStyleMessage(originalFileName, conversionResult) {
     messageText += `🖼️ 圖片檔案 (${conversionResult.imageFiles.count} 張)：\n`;
     messageText += `📦 批量下載(ZIP)：\n${conversionResult.imageFiles.zipDownloadUrl}\n\n`;
     
-    // 列出個別圖片
     if (conversionResult.imageFiles.files && conversionResult.imageFiles.files.length > 0) {
       messageText += `📋 個別頁面：\n`;
-      conversionResult.imageFiles.files.forEach((img, index) => {
+      conversionResult.imageFiles.files.forEach((img) => {
         messageText += `第 ${img.page} 頁：${img.downloadUrl}\n`;
       });
     }
@@ -480,11 +420,11 @@ function createLineStyleMessage(originalFileName, conversionResult) {
 }
 
 /**
- * 發送 LINE 風格的訊息到 N8N
+ * 發送增強版 LINE 風格訊息到 N8N (含完整使用者資訊和下載連結)
  */
-async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
+async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
   try {
-    console.log('💬 發送 LINE 風格訊息到 N8N');
+    console.log('💬 發送增強版 LINE 風格訊息到 N8N');
     
     const webhookUrl = process.env.N8N_WEBHOOK_URL;
     if (!webhookUrl) {
@@ -493,10 +433,10 @@ async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
     }
 
     const replyToken = generateReplyToken();
-    const messageText = createLineStyleMessage(fileInfo.fileName, conversionResult);
+    const messageText = createEnhancedLineMessage(userInfo, fileInfo.fileName, conversionResult);
 
-    // 構造模仿 LINE webhook 的資料結構
-    const lineStyleData = {
+    // 增強版資料結構，包含完整使用者資訊和所有下載連結
+    const enhancedLineData = {
       // === LINE Webhook 標準格式 ===
       destination: process.env.LINE_BOT_USER_ID || 'bot_destination',
       events: [
@@ -506,7 +446,7 @@ async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
           timestamp: Date.now(),
           source: {
             type: 'user',
-            userId: userId || 'anonymous_user'
+            userId: userInfo.liffUserId || 'anonymous_user'
           },
           replyToken: replyToken,
           message: {
@@ -517,66 +457,129 @@ async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
         }
       ],
       
-      // === 自訂的檔案處理資訊 ===
-      customData: {
-        type: 'file_conversion_completed',
-        processingInfo: {
-          originalFile: {
-            name: fileInfo.fileName,
-            size: fileInfo.fileSize,
-            uploadTime: fileInfo.uploadTime
-          },
-          
-          // PDF 資訊
-          pdfResult: {
-            fileName: conversionResult.pdfFile.name,
-            downloadUrl: conversionResult.pdfFile.downloadUrl,
-            fileSize: conversionResult.pdfFile.size
-          },
-          
-          // 圖片資訊
-          imageResult: {
-            count: conversionResult.imageFiles.count,
-            zipDownloadUrl: conversionResult.imageFiles.zipDownloadUrl,
-            batchDownloadUrl: conversionResult.imageFiles.downloadUrl,
-            individualFiles: conversionResult.imageFiles.files
-          },
-          
-          processTime: conversionResult.processTime
-        }
+      // === 完整的使用者資訊 ===
+      userInfo: {
+        name: userInfo.name,
+        email: userInfo.email || null,
+        phone: userInfo.phone || null,
+        liffUserId: userInfo.liffUserId || null,
+        submissionTime: new Date().toISOString()
       },
       
-      // === 額外的 N8N 處理提示 ===
+      // === 檔案處理資訊 ===
+      fileProcessing: {
+        originalFile: {
+          name: fileInfo.fileName,
+          size: fileInfo.fileSize,
+          uploadTime: fileInfo.uploadTime
+        },
+        
+        // PDF 結果 (包含完整下載連結)
+        pdfResult: {
+          fileName: conversionResult.pdfFile.name,
+          downloadUrl: conversionResult.pdfFile.downloadUrl,
+          fileSize: conversionResult.pdfFile.size,
+          // 直接提供可點擊的連結
+          directDownloadLink: conversionResult.pdfFile.downloadUrl
+        },
+        
+        // 圖片結果 (包含所有下載選項)
+        imageResult: {
+          count: conversionResult.imageFiles.count,
+          hasImages: conversionResult.imageFiles.count > 0,
+          
+          // 批量下載選項
+          batchDownload: {
+            zipUrl: conversionResult.imageFiles.zipDownloadUrl,
+            folderUrl: conversionResult.imageFiles.downloadUrl
+          },
+          
+          // 個別檔案下載連結
+          individualFiles: conversionResult.imageFiles.files.map(file => ({
+            page: file.page,
+            fileName: file.name,
+            downloadUrl: file.downloadUrl,
+            // 直接可用的連結
+            directLink: file.downloadUrl
+          }))
+        },
+        
+        processTime: conversionResult.processTime
+      },
+      
+      // === 所有下載連結的匯總 (方便 N8N 直接取用) ===
+      downloadLinks: {
+        // PDF 下載
+        pdf: {
+          url: conversionResult.pdfFile.downloadUrl,
+          fileName: conversionResult.pdfFile.name,
+          type: 'pdf'
+        },
+        
+        // 圖片下載 (如果有的話)
+        images: conversionResult.imageFiles.count > 0 ? {
+          // ZIP 批量下載
+          zipDownload: {
+            url: conversionResult.imageFiles.zipDownloadUrl,
+            fileName: `${path.parse(fileInfo.fileName).name}-images.zip`,
+            type: 'zip',
+            description: `包含 ${conversionResult.imageFiles.count} 張圖片`
+          },
+          
+          // 個別圖片下載
+          individual: conversionResult.imageFiles.files.map(file => ({
+            url: file.downloadUrl,
+            fileName: file.name,
+            page: file.page,
+            type: 'image'
+          }))
+        } : null
+      },
+      
+      // === N8N 處理提示 ===
       n8nProcessingHints: {
         shouldReplyToUser: true,
         replyToken: replyToken,
-        messageType: 'file_conversion_result',
+        messageType: 'file_conversion_completed',
+        userName: userInfo.name,
         hasMultipleDownloads: conversionResult.imageFiles.count > 0,
-        recommendedAction: 'send_download_links'
+        recommendedAction: 'send_download_links_with_user_greeting',
+        
+        // 建議的回覆格式
+        suggestedReplyFormat: {
+          greeting: `${userInfo.name} 您好！`,
+          pdfLink: `📄 PDF: ${conversionResult.pdfFile.downloadUrl}`,
+          imageLinks: conversionResult.imageFiles.count > 0 ? 
+            `🖼️ 圖片 (${conversionResult.imageFiles.count}張): ${conversionResult.imageFiles.zipDownloadUrl}` : null
+        }
       }
     };
 
-    // 詳細日誌
-    console.log('📤 LINE 風格資料結構:');
+    console.log('📤 增強版資料結構:');
+    console.log('  👤 使用者:', userInfo.name);
+    console.log('  📧 Email:', userInfo.email || '未提供');
+    console.log('  📱 電話:', userInfo.phone || '未提供');
     console.log('  🎯 Reply Token:', replyToken);
-    console.log('  👤 User ID:', userId || 'anonymous_user');
-    console.log('  📝 訊息長度:', messageText.length, '字元');
-    console.log('  📄 PDF URL:', conversionResult.pdfFile.downloadUrl);
+    console.log('  📄 PDF 連結:', conversionResult.pdfFile.downloadUrl);
     console.log('  🖼️ 圖片數量:', conversionResult.imageFiles.count);
+    if (conversionResult.imageFiles.count > 0) {
+      console.log('  📦 ZIP 連結:', conversionResult.imageFiles.zipDownloadUrl);
+    }
 
     // 發送到 N8N
-    const response = await axios.post(webhookUrl, lineStyleData, {
+    const response = await axios.post(webhookUrl, enhancedLineData, {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'LINE-Bot/1.0',
-        'X-Line-Signature': 'mock-line-signature', // 模擬 LINE 簽名
-        'X-Source': 'line-bot-file-converter',
-        'X-Custom-Type': 'file-conversion-completed'
+        'X-Line-Signature': 'mock-line-signature',
+        'X-Source': 'line-bot-file-converter-enhanced',
+        'X-Custom-Type': 'file-conversion-with-user-info',
+        'X-User-Name': userInfo.name
       },
       timeout: 15000
     });
 
-    console.log('✅ LINE 風格訊息發送成功！');
+    console.log('✅ 增強版訊息發送成功！');
     console.log('📡 N8N 回應狀態:', response.status);
     
     if (response.data) {
@@ -587,17 +590,20 @@ async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
       success: true,
       replyToken: replyToken,
       messageLength: messageText.length,
-      n8nResponse: response.status
+      n8nResponse: response.status,
+      userInfo: userInfo,
+      downloadLinks: enhancedLineData.downloadLinks
     };
 
   } catch (error) {
-    console.error('❌ 發送 LINE 風格訊息失敗:', error.message);
+    console.error('❌ 發送增強版訊息失敗:', error.message);
     if (error.response) {
       console.error('📡 N8N 錯誤回應:', error.response.status, error.response.data);
     }
     return {
       success: false,
-      error: error.message
+      error: error.message,
+      userInfo: userInfo
     };
   }
 }
@@ -608,13 +614,13 @@ async function sendLineStyleMessageToN8N(userId, fileInfo, conversionResult) {
 app.get('/api/health', async (req, res) => {
   console.log('❤️ 健康檢查');
   
-  // 檢查系統工具
   const systemTools = await checkSystemTools();
   
   res.json({ 
     status: 'ok',
     timestamp: new Date().toISOString(),
     port: PORT,
+    version: 'enhanced-with-user-info',
     directories: {
       upload: uploadDir,
       pdf: pdfDir,
@@ -629,9 +635,11 @@ app.get('/api/health', async (req, res) => {
       pdfUpload: true,
       docConversion: !!libreOfficeConvert,
       imageConversion: !!pdf2pic,
-      lineStyleMessaging: true  // 新增功能
+      userInfoCollection: true,  // 新功能
+      enhancedLineMessaging: true,  // 增強功能
+      completeDownloadLinks: true   // 完整下載連結
     },
-    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定 (LINE 風格)' : '未設定'
+    n8nWebhook: process.env.N8N_WEBHOOK_URL ? '已設定 (增強版)' : '未設定'
   });
 });
 
@@ -639,15 +647,23 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/test', (req, res) => {
   console.log('🧪 測試 API');
   res.json({ 
-    message: '文件轉換伺服器正常運作 (LINE 風格訊息)',
+    message: '增強版文件轉換伺服器正常運作',
     timestamp: new Date().toISOString(),
-    features: ['檔案上傳', 'PDF轉換', '圖片轉換', 'LINE風格訊息']
+    features: [
+      '檔案上傳', 
+      'PDF轉換', 
+      '圖片轉換', 
+      '使用者資訊收集', 
+      '增強版LINE風格訊息',
+      '完整下載連結提供'
+    ],
+    version: 'enhanced-v2'
   });
 });
 
-// 檔案上傳與轉換 API（使用 LINE 風格訊息）
+// 增強版檔案上傳與轉換 API
 app.post('/api/upload', (req, res) => {
-  console.log('📤 收到上傳請求');
+  console.log('📤 收到增強版上傳請求');
   
   upload.single('file')(req, res, async (err) => {
     try {
@@ -666,9 +682,26 @@ app.post('/api/upload', (req, res) => {
         });
       }
 
+      // 提取使用者資訊
+      const userInfo = {
+        name: req.body.userName?.trim(),
+        email: req.body.userEmail?.trim() || null,
+        phone: req.body.userPhone?.trim() || null,
+        liffUserId: req.body.userId || null
+      };
+
+      // 驗證使用者姓名
+      if (!userInfo.name || userInfo.name.length < 2) {
+        return res.status(400).json({
+          success: false,
+          error: '請提供有效的使用者姓名'
+        });
+      }
+
+      console.log('👤 使用者資訊:', userInfo);
+
       const originalExt = path.extname(req.file.originalname).toLowerCase();
       
-      // 檢查是否支援該檔案格式
       if (originalExt !== '.pdf' && !libreOfficeConvert) {
         return res.status(400).json({
           success: false,
@@ -680,7 +713,8 @@ app.post('/api/upload', (req, res) => {
       console.log('📊 檔案資訊:', {
         原始檔名: req.file.originalname,
         儲存檔名: req.file.filename,
-        檔案大小: `${(req.file.size / 1024 / 1024).toFixed(2)} MB`
+        檔案大小: `${(req.file.size / 1024 / 1024).toFixed(2)} MB`,
+        上傳者: userInfo.name
       });
 
       // 執行檔案轉換流程
@@ -694,13 +728,11 @@ app.post('/api/upload', (req, res) => {
         uploadTime: new Date().toISOString()
       };
 
-      const userId = req.body.userId;
-      
-      // 發送 LINE 風格訊息到 N8N
-      console.log('💬 發送 LINE 風格訊息到 N8N...');
-      const n8nResult = await sendLineStyleMessageToN8N(userId, fileInfo, conversionResult);
+      // 發送增強版 LINE 風格訊息到 N8N
+      console.log('💬 發送增強版訊息到 N8N...');
+      const n8nResult = await sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult);
 
-      // 清理原始上傳檔案（可選）
+      // 清理原始上傳檔案
       if (process.env.KEEP_ORIGINAL_FILES !== 'true') {
         try {
           fs.unlinkSync(req.file.path);
@@ -710,11 +742,17 @@ app.post('/api/upload', (req, res) => {
         }
       }
 
-      // 回應給前端（簡化版）
+      // 回應給前端
       const result = {
         success: true,
-        message: '檔案轉換完成，已發送 LINE 風格訊息',
+        message: `${userInfo.name} 您好！檔案轉換完成`,
         fileName: req.file.originalname,
+        userInfo: {
+          name: userInfo.name,
+          email: userInfo.email,
+          phone: userInfo.phone
+        },
+        n8nNotified: n8nResult.success,
         lineMessage: {
           sent: n8nResult.success,
           replyToken: n8nResult.replyToken,
@@ -722,15 +760,19 @@ app.post('/api/upload', (req, res) => {
         },
         conversions: {
           pdfGenerated: true,
-          imagesGenerated: conversionResult.imageFiles.count > 0
-        }
+          imagesGenerated: conversionResult.imageFiles.count > 0,
+          pdfUrl: conversionResult.pdfFile.downloadUrl,
+          imageZipUrl: conversionResult.imageFiles.zipDownloadUrl
+        },
+        downloadLinks: n8nResult.downloadLinks || null
       };
 
-      console.log('🏁 LINE 風格轉換流程完成:', {
+      console.log('🏁 增強版轉換流程完成:', {
+        使用者: userInfo.name,
         檔案: fileInfo.fileName,
         'PDF': conversionResult.pdfFile.name,
         '圖片數': conversionResult.imageFiles.count,
-        'LINE訊息': n8nResult.success ? '✅' : '❌',
+        'N8N通知': n8nResult.success ? '✅' : '❌',
         'Reply Token': n8nResult.replyToken
       });
 
@@ -756,18 +798,32 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// 新增：測試 LINE 風格訊息的 API
-app.post('/api/test-line-message', async (req, res) => {
+// 測試增強版 LINE 風格訊息的 API
+app.post('/api/test-enhanced-message', async (req, res) => {
   try {
-    console.log('🧪 測試 LINE 風格訊息');
+    console.log('🧪 測試增強版 LINE 風格訊息');
     
-    const { userId, fileName } = req.body;
+    const { 
+      userName = '測試用戶', 
+      userEmail = 'test@example.com',
+      userPhone = '0912-345-678',
+      userId = 'test-user-id',
+      fileName = 'test-resume.pdf' 
+    } = req.body;
+    
+    // 模擬使用者資訊
+    const mockUserInfo = {
+      name: userName,
+      email: userEmail,
+      phone: userPhone,
+      liffUserId: userId
+    };
     
     // 模擬轉換結果
     const mockConversionResult = {
       pdfFile: {
-        name: fileName || 'test-document.pdf',
-        downloadUrl: `${process.env.FRONTEND_URL || `http://localhost:${PORT}`}/api/download/pdf/test-123.pdf`,
+        name: fileName,
+        downloadUrl: `${process.env.FRONTEND_URL || `http://localhost:${PORT}`}/api/download/pdf/test-123-${fileName}`,
         size: 1024000
       },
       imageFiles: {
@@ -784,27 +840,28 @@ app.post('/api/test-line-message', async (req, res) => {
     };
     
     const mockFileInfo = {
-      fileName: fileName || 'test-document.pdf',
-      savedName: 'test-123-test-document.pdf',
+      fileName: fileName,
+      savedName: `test-123-${fileName}`,
       fileSize: 1024000,
       uploadTime: new Date().toISOString()
     };
     
     // 發送測試訊息
-    const n8nResult = await sendLineStyleMessageToN8N(userId, mockFileInfo, mockConversionResult);
+    const n8nResult = await sendEnhancedMessageToN8N(mockUserInfo, mockFileInfo, mockConversionResult);
     
     res.json({
       success: true,
-      message: '測試 LINE 風格訊息已發送',
+      message: '增強版測試訊息已發送',
       result: n8nResult,
       testData: {
+        userInfo: mockUserInfo,
         fileInfo: mockFileInfo,
         conversionResult: mockConversionResult
       }
     });
     
   } catch (error) {
-    console.error('❌ 測試 LINE 訊息失敗:', error);
+    console.error('❌ 測試增強版訊息失敗:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -840,7 +897,6 @@ app.get('/api/download/images/:folder', async (req, res) => {
         page: index + 1,
         downloadUrl: `/api/download/images/${folderName}/${fileName}`
       })),
-      // 提供 ZIP 下載連結
       zipDownloadUrl: `/api/download/images/${folderName}/zip`
     });
 
@@ -860,12 +916,10 @@ app.get('/api/download/images/:folder/zip', async (req, res) => {
       return res.status(404).json({ error: '圖片資料夾不存在' });
     }
 
-    // 動態載入 archiver（如果需要的話）
     let archiver;
     try {
       archiver = require('archiver');
     } catch (e) {
-      // 如果沒有 archiver，提供替代方案
       return res.status(501).json({ 
         error: 'ZIP 功能不可用',
         message: '請使用個別圖片下載連結',
@@ -882,12 +936,10 @@ app.get('/api/download/images/:folder/zip', async (req, res) => {
 
     console.log('📦 建立 ZIP 檔案:', folderName, imageFiles.length, '張圖片');
 
-    // 設定回應標頭
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${folderName}-images.zip"`);
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
-    // 建立 ZIP 檔案
     const archive = archiver('zip', { zlib: { level: 9 } });
     
     archive.on('error', (err) => {
@@ -899,7 +951,6 @@ app.get('/api/download/images/:folder/zip', async (req, res) => {
 
     archive.pipe(res);
 
-    // 添加所有圖片到 ZIP
     imageFiles.forEach((fileName, index) => {
       const filePath = path.join(folderPath, fileName);
       archive.file(filePath, { name: `page-${index + 1}-${fileName}` });
@@ -922,40 +973,27 @@ app.get('/api/download/images/:folder/:filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(imageDir, folderName, filename);
   
-  console.log('🖼️ 圖片下載請求詳情:');
-  console.log('  資料夾:', folderName);
-  console.log('  檔案名:', filename);
-  console.log('  完整路徑:', filePath);
-  console.log('  檔案存在:', fs.existsSync(filePath));
+  console.log('🖼️ 圖片下載請求:', folderName, '/', filename);
   
-  // 如果檔案不存在，嘗試列出資料夾內容來調試
   if (!fs.existsSync(filePath)) {
     const folderPath = path.join(imageDir, folderName);
     console.log('❌ 檔案不存在，檢查資料夾內容:');
-    console.log('  資料夾路徑:', folderPath);
-    console.log('  資料夾存在:', fs.existsSync(folderPath));
     
     if (fs.existsSync(folderPath)) {
       try {
         const files = fs.readdirSync(folderPath);
         console.log('  資料夾內容:', files);
         
-        // 尋找相似的檔案名
         const similarFiles = files.filter(f => 
           f.includes(path.parse(filename).name.split('-')[0]) || 
           f.includes(path.parse(filename).name)
         );
-        console.log('  相似檔案:', similarFiles);
         
-        // 如果找到完全匹配的檔案，重新導向
         if (files.includes(filename)) {
-          console.log('✅ 找到檔案，重新嘗試下載');
           return downloadFile(res, filePath, '圖片檔案');
         }
         
-        // 如果找到相似檔案，建議正確的檔名
         if (similarFiles.length > 0) {
-          console.log('💡 建議使用:', similarFiles[0]);
           return res.status(404).json({ 
             error: '檔案不存在',
             suggestion: similarFiles[0],
@@ -972,27 +1010,23 @@ app.get('/api/download/images/:folder/:filename', (req, res) => {
     return res.status(404).json({ 
       error: '圖片檔案不存在',
       folderName: folderName,
-      fileName: filename,
-      fullPath: filePath
+      fileName: filename
     });
   }
   
   downloadFile(res, filePath, '圖片檔案');
 });
 
-// 新增：調試用的資料夾檢查 API
+// 調試用的資料夾檢查 API
 app.get('/api/debug/images/:folder', (req, res) => {
   try {
     const folderName = req.params.folder;
     const folderPath = path.join(imageDir, folderName);
     
-    console.log('🔍 調試資料夾:', folderPath);
-    
     if (!fs.existsSync(folderPath)) {
       return res.status(404).json({
         error: '資料夾不存在',
-        folderPath: folderPath,
-        imageDir: imageDir
+        folderPath: folderPath
       });
     }
     
@@ -1096,49 +1130,40 @@ app.use((err, req, res, next) => {
 
 // 伺服器初始化
 const initializeServer = async () => {
-  // 載入轉換模組
   await loadConversionModules();
   
-  // 啟動伺服器
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log('🎉 文件轉換伺服器啟動成功！(LINE 風格訊息版本)');
+    console.log('🎉 增強版文件轉換伺服器啟動成功！');
     console.log(`🌐 Server URL: http://localhost:${PORT}`);
     console.log(`📁 資料夾:`);
     console.log(`   📤 上傳: ${uploadDir}`);
     console.log(`   📄 PDF: ${pdfDir}`);
     console.log(`   🖼️ 圖片: ${imageDir}`);
     console.log(`🔧 轉換功能:`);
-    console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌ (只支援 PDF 上傳)'}`);
-    console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌ (只支援 PDF 下載)'}`);
-    console.log(`💬 LINE 風格訊息: ✅`);
+    console.log(`   📄 DOC/DOCX → PDF: ${libreOfficeConvert ? '✅' : '❌'}`);
+    console.log(`   🖼️ PDF → 圖片: ${pdf2pic ? '✅' : '❌'}`);
+    console.log(`👤 使用者資訊收集: ✅`);
+    console.log(`💬 增強版 LINE 風格訊息: ✅`);
+    console.log(`🔗 完整下載連結提供: ✅`);
     console.log(`🎯 N8N Webhook: ${process.env.N8N_WEBHOOK_URL || '未設定'}`);
     console.log('================================');
     
-    if (!libreOfficeConvert) {
-      console.log('⚠️ 注意：DOC/DOCX 轉換功能不可用');
-      console.log('   使用者只能上傳 PDF 檔案');
-    }
-    
-    if (!pdf2pic) {
-      console.log('⚠️ 注意：PDF 轉圖片功能不可用');
-      console.log('   只會提供 PDF 下載連結');
-    }
-    
-    console.log('✨ 新版系統流程 (LINE 風格)：');
+    console.log('✨ 增強版系統流程：');
+    console.log('   👤 收集使用者資訊 (姓名*、Email、電話)');
     console.log('   📤 檔案上傳');
     console.log('   📄 轉換為 PDF (如果需要)');
     console.log('   🖼️ 轉換為圖片 (如果可用)');
-    console.log('   💬 生成 LINE 風格訊息');
-    console.log('   🎯 發送含 Reply Token 的訊息到 N8N');
-    console.log('   ✅ 回傳簡單確認給前端');
+    console.log('   💬 生成個人化 LINE 風格訊息');
+    console.log('   🔗 包含所有下載連結');
+    console.log('   🎯 發送完整資料到 N8N');
+    console.log('   ✅ 回傳確認給前端');
     console.log('================================');
     console.log('🧪 測試端點：');
-    console.log('   POST /api/test-line-message - 測試 LINE 風格訊息');
+    console.log('   POST /api/test-enhanced-message - 測試增強版訊息');
     console.log('   GET /api/health - 系統健康檢查');
     console.log('================================');
   });
 
-  // 優雅關閉
   process.on('SIGTERM', () => {
     console.log('📴 收到 SIGTERM，正在關閉伺服器...');
     server.close(() => {
