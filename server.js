@@ -566,7 +566,7 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
       console.log('  📦 ZIP 連結:', conversionResult.imageFiles.zipDownloadUrl);
     }
 
-    // 發送到 N8N
+    // 發送到 N8N (修復標頭中文字元問題)
     const response = await axios.post(webhookUrl, enhancedLineData, {
       headers: {
         'Content-Type': 'application/json',
@@ -574,7 +574,9 @@ async function sendEnhancedMessageToN8N(userInfo, fileInfo, conversionResult) {
         'X-Line-Signature': 'mock-line-signature',
         'X-Source': 'line-bot-file-converter-enhanced',
         'X-Custom-Type': 'file-conversion-with-user-info',
-        'X-User-Name': userInfo.name
+        'X-User-Name': encodeURIComponent(userInfo.name), // 編碼中文字元
+        'X-Has-Images': conversionResult.imageFiles.count > 0 ? 'true' : 'false',
+        'X-File-Count': conversionResult.imageFiles.count.toString()
       },
       timeout: 15000
     });
@@ -798,7 +800,76 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
-// 測試增強版 LINE 風格訊息的 API
+// 測試 N8N Webhook 連接
+app.get('/api/test-n8n-connection', async (req, res) => {
+  try {
+    console.log('🔍 測試 N8N Webhook 連接');
+    
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!webhookUrl) {
+      return res.json({
+        success: false,
+        error: 'N8N_WEBHOOK_URL 環境變數未設定',
+        message: '請在 .env 檔案中設定 N8N_WEBHOOK_URL'
+      });
+    }
+
+    console.log('🎯 測試 URL:', webhookUrl);
+
+    // 發送簡單的測試資料
+    const testData = {
+      type: 'connection_test',
+      timestamp: new Date().toISOString(),
+      message: 'N8N Webhook 連接測試',
+      source: 'liff-file-uploader'
+    };
+
+    const response = await axios.post(webhookUrl, testData, {
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'N8N-Test/1.0',
+        'X-Test': 'true'
+      },
+      timeout: 10000
+    });
+
+    console.log('✅ N8N 連接測試成功');
+    console.log('📡 回應狀態:', response.status);
+    console.log('📄 回應內容:', response.data);
+
+    res.json({
+      success: true,
+      message: 'N8N Webhook 連接正常',
+      webhookUrl: webhookUrl,
+      responseStatus: response.status,
+      responseData: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ N8N 連接測試失敗:', error.message);
+    
+    let errorDetail = error.message;
+    if (error.code) {
+      errorDetail += ` (${error.code})`;
+    }
+    if (error.response) {
+      errorDetail += ` - HTTP ${error.response.status}: ${error.response.statusText}`;
+    }
+
+    res.json({
+      success: false,
+      error: 'N8N Webhook 連接失敗',
+      detail: errorDetail,
+      webhookUrl: process.env.N8N_WEBHOOK_URL,
+      suggestions: [
+        '檢查 N8N_WEBHOOK_URL 是否正確',
+        '確認 N8N 服務是否運行',
+        '檢查網路連接',
+        '確認 Webhook 端點是否啟用'
+      ]
+    });
+  }
+});
 app.post('/api/test-enhanced-message', async (req, res) => {
   try {
     console.log('🧪 測試增強版 LINE 風格訊息');
